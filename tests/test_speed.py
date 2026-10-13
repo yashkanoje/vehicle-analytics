@@ -8,8 +8,9 @@ from vehicle_analytics.geometry import Homography
 from vehicle_analytics.speed import zone_speed
 
 
-def event(line_name, frame_time, point):
-    return CrossingEvent("7", line_name, frame_time, point, -1, 1)
+def event(line_name, frame_time, point, normal=(0.0, 1.0)):
+    """A crossing of a horizontal line unless another line normal is given."""
+    return CrossingEvent("7", line_name, frame_time, point, -1, 1, normal)
 
 
 A = event("a", 0.0, (100.0, 80.0))
@@ -91,3 +92,35 @@ def test_homography_error_bar_uses_the_ground_scale_at_each_crossing():
     at_a = 20.0 - 1000.0 / 52.0
     at_b = 5.0 - 1000.0 / 202.0
     assert speed.err_kmph == pytest.approx(speed.kmph * math.hypot(at_a, at_b) / 15.0, rel=1e-6)
+
+
+DIAGONAL_A = event("a", 0.0, (0.0, 100.0))
+DIAGONAL_B = event("b", 9.0, (300.0, 400.0))
+
+
+def test_jitter_acts_across_the_line_so_a_slanted_path_has_a_larger_error():
+    # The path runs at 45 degrees to both horizontal lines. A 2 px error across a line
+    # moves the crossing 2 / cos(45) px along the path.
+    speed = zone_speed(
+        DIAGONAL_A, DIAGONAL_B, 30.0, meters_between_lines=10.0, distance_rel_uncertainty=0.0
+    )
+    along_px = 2.0 / math.cos(math.radians(45.0))
+    travel_px = math.hypot(300.0, 300.0)
+    assert speed.err_kmph == pytest.approx(speed.kmph * math.sqrt(2) * along_px / travel_px)
+
+
+def test_slanted_path_error_in_homography_mode():
+    h = Homography.from_points(
+        [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)],
+        [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)],
+    )  # 0.1 m per pixel everywhere
+    speed = zone_speed(DIAGONAL_A, DIAGONAL_B, 30.0, homography=h, distance_rel_uncertainty=0.0)
+    along_m = 0.1 * 2.0 / math.cos(math.radians(45.0))
+    distance_m = 0.1 * math.hypot(300.0, 300.0)
+    assert speed.err_kmph == pytest.approx(speed.kmph * math.sqrt(2) * along_m / distance_m)
+
+
+def test_path_running_along_a_line_gives_no_speed():
+    # Vertical travel, but line `a` is itself vertical.
+    a = event("a", 0.0, (100.0, 80.0), normal=(1.0, 0.0))
+    assert zone_speed(a, B, 30.0, meters_between_lines=10.0) is None

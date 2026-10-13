@@ -30,6 +30,14 @@ class Line:
         if self.p1 == self.p2:
             raise ValueError(f"line '{self.name}' has zero length")
 
+    @property
+    def normal(self) -> Point:
+        """Unit vector across the line, pointing to its positive side."""
+        dx = self.p2[0] - self.p1[0]
+        dy = self.p2[1] - self.p1[1]
+        length = math.hypot(dx, dy)
+        return (-dy / length, dx / length)
+
     def signed_distance(self, p: Point) -> float:
         """Perpendicular distance from p to the infinite line through the segment.
 

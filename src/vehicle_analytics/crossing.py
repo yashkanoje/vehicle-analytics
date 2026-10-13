@@ -17,6 +17,7 @@ class CrossingEvent:
     point_px: Point
     side_from: int
     side_to: int
+    line_normal: Point
 
 
 def _side(distance: float) -> int:
@@ -66,4 +67,5 @@ def detect_crossing(
         point_px=point,
         side_from=side_from,
         side_to=side_to,
+        line_normal=line.normal,
     )

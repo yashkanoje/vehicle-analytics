@@ -88,3 +88,10 @@ def test_ground_interpolation_removes_perspective_bias_over_a_gap():
 def test_without_a_ground_mapping_interpolation_is_linear_in_the_image():
     event = detect_crossing(LINE, "7", (50.0, 50.0), (50.0, 200.0), 0, 10)
     assert event.frame_time == pytest.approx(10.0 / 3.0)
+
+
+def test_event_carries_the_unit_normal_of_its_line():
+    assert cross((50.0, 98.0), (50.0, 102.0)).line_normal == pytest.approx((0.0, 1.0))
+    diagonal = Line("d", (0.0, 0.0), (100.0, 100.0))
+    normal = cross((60.0, 40.0), (40.0, 60.0), line=diagonal).line_normal
+    assert normal == pytest.approx((-(0.5**0.5), 0.5**0.5))

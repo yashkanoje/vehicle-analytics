@@ -45,13 +45,16 @@ points are projected to the ground plane and the distance is measured there.
 | Term | Formula | Default |
 |---|---|---|
 | Box localisation, calibrated | `√(s_a² + s_b²) / distance` | `jitter_px = 2` |
-| Box localisation, not calibrated | `√2 · jitter_px / travel_px` | `jitter_px = 2` |
+| Box localisation, not calibrated | `√(p_a² + p_b²) / travel_px` | `jitter_px = 2` |
 | Real-world scale | `distance_rel_uncertainty` | `0.05` |
 
-`s_a` and `s_b` are the ground distances that a shift of `jitter_px` along the path makes at
-each crossing point. They differ because a pixel covers more road far from the camera; on
-the motorway footage below one pixel is about 0.8 m at the far line and 0.2 m at the near
-one. Without a calibration the image scale is taken as uniform between the lines.
+A box-edge error of `jitter_px` across a line moves the crossing along the vehicle's path by
+`p = jitter_px / cos θ` pixels, where θ is the angle between the path and the line's normal:
+a vehicle that meets the line at a slant is timed less precisely. `p_a` and `p_b` are those
+shifts at the two lines, and `s_a` and `s_b` are the same shifts in metres on the ground.
+The two differ because a pixel covers more road far from the camera; on the motorway
+footage below one pixel is about 0.8 m at the far line and 0.2 m at the near one. Without a
+calibration the image scale is taken as uniform between the lines.
 
 Both inputs are stated assumptions, set in the config. The error bar does not grow with the
 number of frames the tracker missed around a crossing.
@@ -128,7 +131,8 @@ repository.
 | down (towards camera) | free-flowing | 83 | 76 | 94 km/h | 77–111 km/h |
 | up (away from camera) | queuing | 75 | 66 | 37 km/h | 31–46 km/h |
 
-The mean error bar on a speed is about ±6 %. Vehicles counted without a speed crossed only
+The error bar on each speed is ±7.4 %: ±5 % from the scale and ±5.5 % from box localisation,
+most of it at the far line. Vehicles counted without a speed crossed only
 one of the two lines under a single track ID, or were still between the lines when the clip
 ended.
 
