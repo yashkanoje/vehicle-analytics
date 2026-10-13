@@ -19,6 +19,8 @@ from vehicle_analytics.attributes import (
     colour_name,
     crop_box,
     lane_at,
+    road_colour,
+    zone_mask,
 )
 from vehicle_analytics.config import Config
 from vehicle_analytics.detector import Detection
@@ -177,6 +179,7 @@ def run(
     out_dir = prepare_out_dir(out_dir)
     lines = config.lines_px(source.width, source.height)
     zones = config.zones_px(source.width, source.height)
+    road_mask = zone_mask(zones, source.width, source.height)
     homography = config.homography_px(source.width, source.height)
     to_ground = homography.to_ground if homography is not None else None
     video_path = out_dir / "annotated.mp4"
@@ -231,6 +234,7 @@ def run(
             tracks = tracker.update(detector.detect(frame), frame)
 
             # First pass: measure. Crops are taken before anything is drawn on the frame.
+            road_bgr = road_colour(frame, road_mask)
             for track in tracks:
                 state = states.setdefault(track.track_id, TrackState(track.track_id))
                 point = reference_point(track.box_xyxy)
@@ -257,7 +261,7 @@ def run(
                     area = box_area(track.box_xyxy)
                     if state.wants_appearance(area):
                         crop = crop_box(frame, track.box_xyxy)
-                        state.add_appearance(area, colour_name(crop), crop)
+                        state.add_appearance(area, colour_name(crop, road_bgr), crop)
 
             # Second pass: draw.
             render.draw_zones(frame, zones)

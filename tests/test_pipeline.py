@@ -399,3 +399,24 @@ def test_snapshot_is_taken_before_the_overlay_is_drawn(tmp_path, store):
 def test_run_without_a_store_still_works(tmp_path):
     result = run_script(path_of("1", DOWN), 6, tmp_path)
     assert result.summary["run_id"] is None
+
+
+def test_colour_is_balanced_against_the_road_inside_the_zones(tmp_path, store):
+    # A blue-cast road with a neutral silver vehicle painted where the tracker reports it.
+    road, silver = (69, 50, 42), (116, 99, 84)
+    frames, script = [], {}
+    for frame_index, y in enumerate(DOWN, start=1):
+        frame = np.full((SIZE, SIZE, 3), road, dtype=np.uint8)
+        x1, y1, x2, y2 = (int(v) for v in box(y, 150.0))
+        frame[y1:y2, x1:x2] = silver
+        frames.append(frame)
+        script[frame_index] = [Track("1", box(y, 150.0), "car")]
+    result = run(
+        ArraySource(frames, FPS, SIZE, SIZE),
+        config(zones=LANES),
+        NoDetector(),
+        ScriptedTracker(script),
+        tmp_path / "out",
+        store=store,
+    )
+    assert store.vehicles(result.summary["run_id"])[0]["colour"] == "grey"

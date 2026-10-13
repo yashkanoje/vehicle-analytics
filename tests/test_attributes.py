@@ -1,7 +1,15 @@
 import numpy as np
 import pytest
 
-from vehicle_analytics.attributes import box_area, box_inside_frame, colour_name, crop_box, lane_at
+from vehicle_analytics.attributes import (
+    box_area,
+    box_inside_frame,
+    colour_name,
+    crop_box,
+    lane_at,
+    road_colour,
+    zone_mask,
+)
 from vehicle_analytics.geometry import Zone
 
 
@@ -70,3 +78,58 @@ def test_box_area_and_crop():
     assert crop.shape == (20, 40, 3)  # corners are truncated to whole pixels
     crop[:] = 0
     assert frame[25, 20].any()  # the crop is a copy
+
+
+# Median colours measured on the development clip, whose light has a strong blue cast:
+# even the bare road surface is far from grey.
+ROAD = (69.0, 50.0, 42.0)
+
+
+def test_neutral_vehicles_are_not_named_after_the_scene_colour_cast():
+    assert colour_name(solid((66, 44, 32)), road_bgr=ROAD) == "black"
+    assert colour_name(solid((116, 99, 84)), road_bgr=(80.0, 61.0, 50.0)) == "grey"
+    assert colour_name(solid((180, 157, 133)), road_bgr=(80.0, 62.0, 52.0)) == "white"
+
+
+def test_a_coloured_vehicle_keeps_its_colour_under_a_cast():
+    assert colour_name(solid((60, 40, 150)), road_bgr=ROAD) == "red"
+
+
+def test_without_a_road_reference_the_cast_is_taken_at_face_value():
+    assert colour_name(solid((116, 99, 84))) == "blue"  # the limitation, stated
+
+
+def test_road_colour_is_the_median_inside_the_zones():
+    frame = solid((10, 200, 10), (100, 100))
+    frame[:, 50:] = (69, 50, 42)
+    right_half = ((50.0, 0.0), (100.0, 0.0), (100.0, 100.0), (50.0, 100.0))
+    mask = zone_mask([Zone("r", "lane", right_half, "down")], 100, 100)
+    assert road_colour(frame, mask) == pytest.approx((69.0, 50.0, 42.0))
+
+
+def test_no_zones_means_no_road_reference():
+    assert zone_mask([], 100, 100) is None
+    assert road_colour(solid((1, 2, 3)), None) is None
+
+
+def vehicle(paint_bgr, glass_bgr=(40, 30, 25), size=(60, 60)):
+    """Paint with a dark windscreen across the middle, as a vehicle seen head-on appears."""
+    crop = solid(paint_bgr, size)
+    height, width = size
+    crop[height // 3 : 2 * height // 3, width // 4 : 3 * width // 4] = glass_bgr
+    return crop
+
+
+def test_colour_is_read_from_the_paint_not_the_windscreen():
+    assert colour_name(vehicle((180, 157, 133)), road_bgr=(80.0, 62.0, 52.0)) == "white"
+    assert colour_name(vehicle((60, 40, 150)), road_bgr=ROAD) == "red"
+    assert colour_name(vehicle((0, 0, 255))) == "red"
+
+
+def test_a_vehicle_no_brighter_than_the_road_is_black():
+    # Highlights lift a black car above any fixed darkness threshold; the road is the yardstick.
+    assert colour_name(solid((88, 66, 55)), road_bgr=(80.0, 62.0, 52.0)) == "black"
+
+
+def test_silver_is_not_bright_enough_to_be_white():
+    assert colour_name(solid((176, 136, 113)), road_bgr=(80.0, 62.0, 52.0)) == "grey"
