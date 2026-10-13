@@ -74,6 +74,9 @@ calibration:
 # with the width given by DMRB CD 127 Figure 2.1.1N1a (lanes 3.65 / 3.70 / 3.65 m, hard
 # shoulder 3.30 m), 40 m long. Printed by tools/fit_highway_calibration.py and checked
 # against it by tests/test_calibration_evidence.py. Lane 1 is the nearside lane.
+# One exception to the stated widths: the near-left corner of up_shoulder falls just
+# outside the frame and is moved to its edge, so that zone is about 2.4 m wide at its
+# near end.
 zones:
   - name: down_lane_3
     kind: lane

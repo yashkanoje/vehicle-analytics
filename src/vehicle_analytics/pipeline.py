@@ -14,13 +14,12 @@ import numpy as np
 
 from vehicle_analytics import render
 from vehicle_analytics.attributes import (
+    RoadReference,
     box_area,
     box_inside_frame,
     colour_name,
     crop_box,
     lane_at,
-    road_colour,
-    zone_mask,
 )
 from vehicle_analytics.config import Config
 from vehicle_analytics.detector import Detection
@@ -28,7 +27,7 @@ from vehicle_analytics.geometry import reference_point
 from vehicle_analytics.speed import zone_speed
 from vehicle_analytics.state import TrackState, VehicleRecord
 from vehicle_analytics.stats import Stats
-from vehicle_analytics.store import Store
+from vehicle_analytics.store import Store, StoreError
 from vehicle_analytics.tracking import Track
 
 WINDOW_TITLE = "vehicle-analytics (Esc to stop)"
@@ -179,7 +178,7 @@ def run(
     out_dir = prepare_out_dir(out_dir)
     lines = config.lines_px(source.width, source.height)
     zones = config.zones_px(source.width, source.height)
-    road_mask = zone_mask(zones, source.width, source.height)
+    road = RoadReference(zones, source.width, source.height)
     homography = config.homography_px(source.width, source.height)
     to_ground = homography.to_ground if homography is not None else None
     video_path = out_dir / "annotated.mp4"
@@ -207,6 +206,7 @@ def run(
     records: list[VehicleRecord] = []
     stats = Stats()
     frame_index = 0
+    write_error: Exception | None = None
 
     def save_snapshot(state: TrackState) -> str | None:
         if state.snapshot is None:
@@ -215,7 +215,10 @@ def run(
         if not ok:
             return None
         # Written through Python, not cv2.imwrite, which fails on non-ASCII paths on Windows.
-        path = prepare_out_dir(out_dir / "snapshots") / f"{state.track_id}.jpg"
+        # One folder per database run, so a later run into the same output folder cannot
+        # replace the images an earlier run's rows point at.
+        folder = out_dir / "snapshots" / (str(run_id) if run_id is not None else "")
+        path = prepare_out_dir(folder) / f"{state.track_id}.jpg"
         path.write_bytes(encoded.tobytes())
         return path.as_posix()
 
@@ -234,12 +237,19 @@ def run(
             tracks = tracker.update(detector.detect(frame), frame)
 
             # First pass: measure. Crops are taken before anything is drawn on the frame.
-            road_bgr = road_colour(frame, road_mask)
+            road_bgr = road.colour(frame)
             for track in tracks:
                 state = states.setdefault(track.track_id, TrackState(track.track_id))
                 point = reference_point(track.box_xyxy)
+                visible = box_inside_frame(track.box_xyxy, source.width, source.height)
                 events = state.observe(
-                    frame_index, point, track.cls_name, lines.values(), to_ground, zones
+                    frame_index,
+                    point,
+                    track.cls_name,
+                    lines.values(),
+                    to_ground,
+                    zones,
+                    visible=visible,
                 )
                 for event in events:
                     if event.line_name == config.count_line:
@@ -257,11 +267,12 @@ def run(
                         jitter_px=config.speed.jitter_px,
                         distance_rel_uncertainty=config.speed.distance_rel_uncertainty,
                     )
-                if box_inside_frame(track.box_xyxy, source.width, source.height):
+                if visible:
                     area = box_area(track.box_xyxy)
                     if state.wants_appearance(area):
                         crop = crop_box(frame, track.box_xyxy)
-                        state.add_appearance(area, colour_name(crop, road_bgr), crop)
+                        if crop.size:  # a box under a pixel wide has no pixels
+                            state.add_appearance(area, colour_name(crop, road_bgr), crop)
 
             # Second pass: draw.
             render.draw_zones(frame, zones)
@@ -296,8 +307,12 @@ def run(
         writer.release()
         if display:
             cv2.destroyAllWindows()
+        # A vehicle that cannot be stored must not cost the run its other outputs.
         for track_id in list(states):
-            finalise(track_id)
+            try:
+                finalise(track_id)
+            except (StoreError, OutputError) as exc:
+                write_error = write_error or exc
         elapsed_s = frame_index / fps
         summary = {
             "video": video_name,
@@ -310,8 +325,13 @@ def run(
         }
         write_outputs(out_dir, records, summary)
         if store is not None:
-            store.finish_run(run_id, frame_index)
+            try:
+                store.finish_run(run_id, frame_index)
+            except StoreError as exc:
+                write_error = write_error or exc
 
+    if write_error is not None:
+        raise write_error
     return RunResult(
         records=records, summary=summary, out_dir=out_dir, frames_processed=frame_index
     )

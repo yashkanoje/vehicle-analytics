@@ -81,8 +81,14 @@ class TrackState:
         lines: Iterable[Line],
         to_ground: Callable[[Point], Point] | None = None,
         zones: Iterable[Zone] = (),
+        visible: bool = True,
     ) -> list[CrossingEvent]:
-        """Add one observation and return the lines newly crossed by it."""
+        """Add one observation and return the lines newly crossed by it.
+
+        `visible` is False for a box cut by the frame edge. Its reference point is
+        pinned to that edge, so it is kept out of the ground history and cannot give
+        a live speed.
+        """
         new_events: list[CrossingEvent] = []
         if self.history:
             k_prev, p_prev = self.history[-1]
@@ -97,7 +103,7 @@ class TrackState:
                     new_events.append(event)
         self.history.append((frame_index, point))
         self.class_votes[cls_name] += 1
-        if to_ground is not None:
+        if to_ground is not None and visible:
             self.ground_history.append((frame_index, to_ground(point)))
         for zone in zones:
             if zone.contains(point):

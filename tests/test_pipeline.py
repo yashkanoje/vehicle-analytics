@@ -1,6 +1,7 @@
 import csv
 import datetime
 import json
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -15,7 +16,7 @@ from vehicle_analytics.pipeline import (
     VideoOpenError,
     run,
 )
-from vehicle_analytics.store import Store
+from vehicle_analytics.store import Store, StoreError
 from vehicle_analytics.tracking import Track
 
 SIZE = 200
@@ -334,7 +335,7 @@ def test_vehicle_row_is_written_with_lane_colour_and_snapshot(tmp_path, store):
     assert (row["lane"], row["colour"]) == ("right", "black")
     assert row["speed_kmph"] == pytest.approx(120.0)
     assert (row["first_seen_s"], row["last_seen_s"]) == (0.1, 0.6)
-    assert row["snapshot_path"].endswith("out/snapshots/1.jpg")
+    assert row["snapshot_path"].endswith(f"out/snapshots/{run_id}/1.jpg")
     assert result.records[0].lane == "right"
 
 
@@ -391,8 +392,10 @@ def test_snapshot_is_taken_before_the_overlay_is_drawn(tmp_path, store):
         for frame, y in enumerate(DOWN, start=1)
     }
     result = run_with_store(script, 6, tmp_path, store)
-    for name in ("1.jpg", "2.jpg"):
-        image = cv2.imread(str(result.out_dir / "snapshots" / name))
+    rows = store.vehicles(result.summary["run_id"])
+    assert len(rows) == 2
+    for row in rows:
+        image = cv2.imread(row["snapshot_path"])
         assert image.max() < 30  # the frames are black; any overlay would be bright
 
 
@@ -420,3 +423,69 @@ def test_colour_is_balanced_against_the_road_inside_the_zones(tmp_path, store):
         store=store,
     )
     assert store.vehicles(result.summary["run_id"])[0]["colour"] == "grey"
+
+
+def test_second_run_into_the_same_folder_keeps_the_first_runs_snapshots(tmp_path, store):
+    first = run_with_store(path_at("1", DOWN, x=150.0), 6, tmp_path, store)
+    second = run_with_store(path_at("1", DOWN, x=150.0), 6, tmp_path, store)
+    paths = [store.vehicles(r.summary["run_id"])[0]["snapshot_path"] for r in (first, second)]
+    assert paths[0] != paths[1]
+    assert all(Path(path).is_file() for path in paths)
+
+
+class FailingStore:
+    """A store whose vehicle writes fail, as with a full disk or a locked file."""
+
+    finished = None
+
+    def start_run(self, *args, **kwargs):
+        return 1
+
+    def add_vehicle(self, run_id, record):
+        raise StoreError("cannot write to database x.db: disk full")
+
+    def finish_run(self, run_id, frame_count):
+        self.finished = frame_count
+
+
+def test_store_failure_still_writes_the_outputs_and_is_reported(tmp_path):
+    failing = FailingStore()
+    with pytest.raises(StoreError, match="disk full"):
+        run(
+            source(6),
+            config(),
+            NoDetector(),
+            ScriptedTracker(path_of("1", DOWN)),
+            tmp_path / "out",
+            store=failing,
+        )
+    out = tmp_path / "out"
+    assert len((out / "events.csv").read_text(encoding="utf-8").splitlines()) == 2
+    assert json.loads((out / "summary.json").read_text(encoding="utf-8"))["total"] == 1
+    assert failing.finished == 6
+
+
+def test_a_degenerate_box_is_ignored_for_appearance(tmp_path):
+    # Under a pixel wide: its crop is empty and cannot be a snapshot.
+    script = {
+        1: [Track("1", (100.0, 80.0, 100.4, 110.0), "car")],
+        2: [Track("1", (100.0, 100.0, 100.4, 130.0), "car")],
+    }
+    result = run_script(script, 2, tmp_path)
+    assert result.records[0].snapshot_path is None
+    assert result.records[0].colour is None
+
+
+def test_live_speed_is_shown_only_once_the_vehicle_is_fully_in_view(tmp_path, monkeypatch):
+    labels = []
+    monkeypatch.setattr(
+        "vehicle_analytics.pipeline.render.draw_track",
+        lambda frame, box_xyxy, label, counted: labels.append(label),
+    )
+    flat = {  # the whole frame is 20 m x 20 m: 0.1 m per pixel
+        "image_points": [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
+        "ground_points_m": [[0.0, 0.0], [20.0, 0.0], [20.0, 20.0], [0.0, 20.0]],
+    }
+    # The first two boxes reach above the top of the frame.
+    run_script(path_of("1", [20, 25, 40, 50, 60]), 5, tmp_path, cfg=config(calibration=flat))
+    assert labels == ["#1 car", "#1 car", "#1 car", "#1 car ~36 km/h", "#1 car ~36 km/h"]

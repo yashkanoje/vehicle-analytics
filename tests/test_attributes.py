@@ -2,13 +2,12 @@ import numpy as np
 import pytest
 
 from vehicle_analytics.attributes import (
+    RoadReference,
     box_area,
     box_inside_frame,
     colour_name,
     crop_box,
     lane_at,
-    road_colour,
-    zone_mask,
 )
 from vehicle_analytics.geometry import Zone
 
@@ -96,20 +95,46 @@ def test_a_coloured_vehicle_keeps_its_colour_under_a_cast():
 
 
 def test_without_a_road_reference_the_cast_is_taken_at_face_value():
-    assert colour_name(solid((116, 99, 84))) == "blue"  # the limitation, stated
+    # Bare road under the cast: with no reference it reads as a blue vehicle.
+    assert colour_name(solid((69, 50, 42))) == "blue"
 
 
-def test_road_colour_is_the_median_inside_the_zones():
+RIGHT_HALF = ((50.0, 0.0), (100.0, 0.0), (100.0, 100.0), (50.0, 100.0))
+LEFT_HALF = ((0.0, 0.0), (50.0, 0.0), (50.0, 100.0), (0.0, 100.0))
+ROAD_LANE = Zone("r", "lane", RIGHT_HALF, "down")
+
+
+def grass_and_road():
     frame = solid((10, 200, 10), (100, 100))
     frame[:, 50:] = (69, 50, 42)
-    right_half = ((50.0, 0.0), (100.0, 0.0), (100.0, 100.0), (50.0, 100.0))
-    mask = zone_mask([Zone("r", "lane", right_half, "down")], 100, 100)
-    assert road_colour(frame, mask) == pytest.approx((69.0, 50.0, 42.0))
+    return frame
 
 
-def test_no_zones_means_no_road_reference():
-    assert zone_mask([], 100, 100) is None
-    assert road_colour(solid((1, 2, 3)), None) is None
+def test_road_reference_is_the_median_inside_the_lane_zones():
+    reference = RoadReference([ROAD_LANE], 100, 100)
+    assert reference.colour(grass_and_road()) == pytest.approx((69.0, 50.0, 42.0))
+
+
+def test_only_lanes_define_the_road():
+    verge = Zone("verge", "restricted", LEFT_HALF)
+    reference = RoadReference([verge, ROAD_LANE], 100, 100)
+    assert reference.colour(grass_and_road()) == pytest.approx((69.0, 50.0, 42.0))
+    assert RoadReference([verge], 100, 100).colour(grass_and_road()) is None
+    assert RoadReference([], 100, 100).colour(grass_and_road()) is None
+
+
+def test_a_lorry_filling_the_lane_for_a_moment_does_not_become_the_reference():
+    reference = RoadReference([ROAD_LANE], 100, 100)
+    for _ in range(10):
+        reference.colour(grass_and_road())
+    covered = grass_and_road()
+    covered[:, 50:] = (250, 250, 250)
+    assert reference.colour(covered) == pytest.approx((69.0, 50.0, 42.0))
+
+
+def test_a_frame_of_another_size_gives_no_reference():
+    reference = RoadReference([ROAD_LANE], 100, 100)
+    assert reference.colour(solid((1, 2, 3), (50, 50))) is None
 
 
 def vehicle(paint_bgr, glass_bgr=(40, 30, 25), size=(60, 60)):
@@ -133,3 +158,14 @@ def test_a_vehicle_no_brighter_than_the_road_is_black():
 
 def test_silver_is_not_bright_enough_to_be_white():
     assert colour_name(solid((176, 136, 113)), road_bgr=(80.0, 62.0, 52.0)) == "grey"
+
+
+def test_a_pale_tint_is_not_given_a_hue_name():
+    # Silver with a slight green tint, as compression and reflections leave on neutral paint.
+    assert colour_name(solid((130, 170, 135)), road_bgr=(70.0, 70.0, 70.0)) == "grey"
+    assert colour_name(solid((40, 160, 60)), road_bgr=(70.0, 70.0, 70.0)) == "green"
+
+
+def test_a_coloured_vehicle_in_shade_keeps_its_colour():
+    # A blue car in shade is no brighter than the road, and still blue.
+    assert colour_name(solid((95, 50, 38)), road_bgr=(80.0, 62.0, 52.0)) == "blue"

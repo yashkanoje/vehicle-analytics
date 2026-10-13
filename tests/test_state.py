@@ -181,3 +181,16 @@ def test_record_carries_the_new_fields():
     assert (record.colour, record.lane) == ("red", "down_2")
     assert (record.first_seen_s, record.last_seen_s) == (0.3, 0.9)
     assert record.snapshot_path == "runs/x/snapshots/1.jpg"
+
+
+def test_partly_visible_observations_are_left_out_of_the_ground_history():
+    # A box cut by the frame edge has its bottom-centre pinned there: not a position.
+    state = TrackState("1")
+    state.observe(1, (100.0, 10.0), "car", [], metres, visible=False)
+    state.observe(2, (100.0, 12.0), "car", [], metres, visible=False)
+    assert state.ground_history == []
+    assert state.live_speed_kmph(10.0, 0.5) is None
+    state.observe(3, (100.0, 30.0), "car", [], metres)
+    state.observe(4, (100.0, 40.0), "car", [], metres)
+    assert state.live_speed_kmph(10.0, 0.5) == pytest.approx(36.0)
+    assert len(state.history) == 4

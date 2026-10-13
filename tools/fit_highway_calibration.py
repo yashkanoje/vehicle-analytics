@@ -195,7 +195,9 @@ def lane_zones(result: FitResult) -> list[dict]:
         polygon = []
         for corner in corners:
             x, y = to_image(homography, corner)
-            # A zone that reaches past the frame edge is cut at the edge.
+            # A corner that falls outside the frame is moved to the frame edge. That
+            # narrows the zone there instead of cutting it: `up_shoulder` is about
+            # 2.4 m wide at its near end, not 3.30 m.
             polygon.append(
                 [round(min(max(x / WIDTH, 0.0), 1.0), 4), round(min(max(y / HEIGHT, 0.0), 1.0), 4)]
             )

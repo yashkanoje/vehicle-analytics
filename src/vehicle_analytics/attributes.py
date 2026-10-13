@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Iterable, Sequence
 
 import cv2
@@ -10,7 +11,10 @@ import numpy as np
 from vehicle_analytics.geometry import Point, Zone
 
 DARK_VALUE = 60
-PALE_SATURATION = 45
+# A hue name is given only to clearly saturated paint. On the validation clip neutral
+# vehicles reached a saturation of about 65 after white balance (compression, reflections,
+# an imperfect road reference), and coloured ones started near 85. A single-clip choice.
+PALE_SATURATION = 80
 BRIGHT_VALUE = 170
 # Brightness relative to the road, in the camera's gamma-encoded values. Asphalt reflects
 # roughly a tenth of the light: black paint no more than that, white paint about eight times
@@ -19,26 +23,30 @@ BLACK_ROAD_RATIO = 1.2
 WHITE_ROAD_RATIO = 2.5
 
 
-def zone_mask(zones: Iterable[Zone], width: int, height: int) -> np.ndarray | None:
-    """Pixels that belong to any zone, i.e. the road surface. None when there are no zones."""
-    zones = list(zones)
-    if not zones:
-        return None
-    mask = np.zeros((height, width), dtype=np.uint8)
-    for zone in zones:
-        cv2.fillPoly(mask, [np.array(zone.polygon, dtype=np.int32)], 1)
-    return mask.astype(bool)
+class RoadReference:
+    """Colour of the road surface: the neutral reference for vehicle colours.
 
+    The median colour inside the lane zones, taken for each frame and then over the last
+    `window` frames, so that a lorry covering the lanes for a moment does not become the
+    reference. A queue that stands on the lanes for longer than the window still will.
+    """
 
-def road_colour(frame: np.ndarray, mask: np.ndarray | None) -> tuple[float, float, float] | None:
-    """Median colour of the road in this frame: the neutral reference for vehicle colours."""
-    if mask is None:
-        return None
-    pixels = frame[mask][::8]
-    if len(pixels) == 0:
-        return None
-    blue, green, red = np.median(pixels, axis=0)
-    return (float(blue), float(green), float(red))
+    def __init__(self, zones: Iterable[Zone], width: int, height: int, window: int = 50) -> None:
+        mask = np.zeros((height, width), dtype=np.uint8)
+        for zone in zones:
+            if zone.kind == "lane":
+                cv2.fillPoly(mask, [np.array(zone.polygon, dtype=np.int32)], 1)
+        self._shape = (height, width)
+        self._pixels = np.flatnonzero(mask)[::8]
+        self._recent: deque[np.ndarray] = deque(maxlen=window)
+
+    def colour(self, frame: np.ndarray) -> tuple[float, float, float] | None:
+        """Road colour for this frame, or None without lanes or for a frame of another size."""
+        if len(self._pixels) == 0 or frame.shape[:2] != self._shape:
+            return None
+        self._recent.append(np.median(frame.reshape(-1, 3)[self._pixels], axis=0))
+        blue, green, red = np.median(np.array(self._recent), axis=0)
+        return (float(blue), float(green), float(red))
 
 
 def colour_name(
@@ -68,14 +76,17 @@ def colour_name(
     hsv = hsv[hsv[:, 2] >= np.median(hsv[:, 2])]  # paint, not glass, tyres or shadow
     saturation = float(np.median(hsv[:, 1]))
     value = float(np.median(hsv[:, 2]))
-    if road_value is None:
-        dark, bright = value < DARK_VALUE, value > BRIGHT_VALUE
-    else:
-        dark = value < DARK_VALUE or value < BLACK_ROAD_RATIO * road_value
-        bright = value > BRIGHT_VALUE or value >= WHITE_ROAD_RATIO * road_value
+    pale = saturation < PALE_SATURATION
+    dark = value < DARK_VALUE
+    bright = value > BRIGHT_VALUE
+    if road_value is not None:
+        bright = bright or value >= WHITE_ROAD_RATIO * road_value
+        # Paint no brighter than the road is black, unless it is clearly coloured:
+        # a blue car in shade is dark and still blue.
+        dark = dark or (pale and value < BLACK_ROAD_RATIO * road_value)
     if dark:
         return "black"
-    if saturation < PALE_SATURATION:
+    if pale:
         return "white" if bright else "grey"
     # Red sits on both sides of the 0/180 wrap; shift it to the middle before the median.
     hue = (float(np.median((hsv[:, 0] + 90.0) % 180.0)) - 90.0) % 180.0

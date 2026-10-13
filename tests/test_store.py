@@ -138,3 +138,15 @@ def test_only_the_phase_b_tables_exist(tmp_path):
         pass
     names = sqlite3.connect(path).execute("SELECT name FROM sqlite_master WHERE type = 'table'")
     assert {name for (name,) in names} == {"runs", "vehicles"}
+
+
+def test_write_failures_are_store_errors(tmp_path):
+    store = Store(tmp_path / "analytics.db")
+    run_id = store.start_run("clip.mp4", 25.0, {})
+    store.close()
+    with pytest.raises(StoreError, match="cannot write to database"):
+        store.start_run("clip.mp4", 25.0, {})
+    with pytest.raises(StoreError, match="cannot write to database"):
+        store.add_vehicle(run_id, record())
+    with pytest.raises(StoreError, match="cannot write to database"):
+        store.finish_run(run_id, 5)

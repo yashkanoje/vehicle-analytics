@@ -85,7 +85,8 @@ Outputs go to `runs/<video name>/`:
 | File | Content |
 |---|---|
 | `annotated.mp4` | Boxes, IDs, class, speed ± error, both lines, live counts |
-| `events.csv` | `track_id, class, direction, counted_at_s, speed_kmph, speed_err_kmph, speed_mode` |
+| `events.csv` | One row per counted vehicle, with the same fields as the `vehicles` table below |
+| `snapshots/` | The largest fully visible crop of each counted vehicle, in a folder per database run |
 | `summary.json` | Counts, flow, speed mean / median / max by direction, config used |
 
 ## Records
@@ -102,8 +103,10 @@ file (`--db`, default `data/analytics.db`).
 | `snapshot_path` | The largest fully visible crop of the vehicle |
 | `plate` | Always empty: this software does not read number plates |
 
-Lanes are polygons in the config (`zones`). While a vehicle is between the lines the overlay
-shows its live speed with a `~`; the stored speed is the zone speed.
+Lanes are polygons in the config (`zones`). Once a vehicle is fully in view the overlay shows
+its live speed with a `~`, until its zone speed has been measured; the stored speed is the
+zone speed. A box cut by the frame edge gives no live speed, because its reference point is
+pinned to that edge.
 
 ```sql
 -- Traffic and mean speed per lane
@@ -137,11 +140,24 @@ the offside lane in both directions is what a motorway should show.
 **Colour is the weak attribute.** The method first specified (median colour of the middle of
 the crop) called 138 of the 158 vehicles blue, because the light in this footage has a blue
 cast (the bare road is far from grey) and the middle of a vehicle seen head-on is
-windscreen. The current method white-balances each crop against the road colour inside the
-lane zones of the same frame, reads the brighter half of the pixels, and judges black and
-white by brightness relative to the road. Of 12 snapshots judged by eye that were not used
-to develop it, 7 were right. The misses: two silver cars named green, one blue car named
-black, two black cars named grey and blue. Treat the column as a hint, not a fact.
+windscreen. The current method:
+
+1. white-balances each crop against the road colour, taken as the median inside the lane
+   zones over the last two seconds;
+2. reads the brighter half of the pixels, which is paint rather than glass and tyres;
+3. gives a hue name only to clearly saturated paint, and otherwise chooses black, grey or
+   white by brightness relative to the road.
+
+On the validation clip it names 67 vehicles grey, 46 black, 25 white, 11 red and 9 blue.
+Checked by eye from contact sheets of the stored snapshots:
+
+| Checked | Right | Misses |
+|---|---|---|
+| All 20 vehicles given a hue name | 18 | A white van named blue; an orange lorry named red |
+| 24 of the 138 given a neutral name, picked at random | 18, and 3 arguable | Two black cars named grey; one blue car named black |
+
+The thresholds were chosen on this one clip, in low evening light. Treat the column as a
+hint, not a fact. A pale colour (light blue, beige) is reported as grey or white by design.
 
 ## Configure
 
@@ -233,12 +249,13 @@ speed carries the error bar described above.
 - Speed accuracy depends on the calibration dimensions, which are taken from road standards,
   not surveyed.
 - The detector is a general COCO model; vans are sometimes labelled as trucks.
-- Colour is a coarse name: 7 of 12 right on a spot check in dusk light at 360 pixels high.
-  It needs lane zones for its road reference; without them the colour of the light is not
-  removed.
+- Colour is a coarse name, with thresholds chosen on one clip in low evening light at
+  360 pixels high. It needs lane zones for its road reference: without them the colour of
+  the light is not removed. A queue standing on the lanes for more than two seconds, or a
+  wet or part-shadowed road, will shift the reference; neither has been tested.
 - Lanes are strips of the fitted ground plane with standard widths, not surveyed lanes.
-- Not real time: the 1501-frame clip above took about eight minutes on the development
-  laptop's GPU, model loading included. The pipeline has not been profiled.
+- Not real time: runs of the 1501-frame clip have taken between about three and eight
+  minutes on the development laptop's GPU. The pipeline has not been profiled.
 
 ## Development
 
