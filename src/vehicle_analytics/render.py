@@ -7,7 +7,7 @@ from collections.abc import Iterable, Sequence
 import cv2
 import numpy as np
 
-from vehicle_analytics.geometry import Line
+from vehicle_analytics.geometry import Line, Zone
 from vehicle_analytics.speed import SpeedEstimate
 from vehicle_analytics.stats import Stats
 
@@ -17,11 +17,25 @@ COUNTED_COLOUR = (0, 255, 0)
 TRACKING_COLOUR = (255, 160, 0)
 
 
-def track_label(track_id: str, cls_name: str, speed: SpeedEstimate | None) -> str:
+ZONE_COLOURS = {"lane": (90, 90, 90), "shoulder": (0, 140, 255), "restricted": (0, 0, 200)}
+
+
+def track_label(
+    track_id: str, cls_name: str, speed: SpeedEstimate | None, live_kmph: float | None = None
+) -> str:
+    """The measured zone speed when there is one; until then, the live speed marked with ~."""
     label = f"#{track_id} {cls_name}"
     if speed is not None:
         label += f" {speed.kmph:.1f} +/- {speed.err_kmph:.1f} km/h"
+    elif live_kmph is not None:
+        label += f" ~{live_kmph:.0f} km/h"
     return label
+
+
+def draw_zones(frame: np.ndarray, zones: Iterable[Zone]) -> None:
+    for zone in zones:
+        outline = np.array(zone.polygon, dtype=np.int32).reshape(-1, 1, 2)
+        cv2.polylines(frame, [outline], True, ZONE_COLOURS.get(zone.kind, (90, 90, 90)), 1)
 
 
 def panel_rows(stats: Stats, elapsed_s: float) -> list[str]:

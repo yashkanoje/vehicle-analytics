@@ -1,7 +1,14 @@
 import numpy as np
 
-from vehicle_analytics.geometry import Line
-from vehicle_analytics.render import draw_lines, draw_panel, draw_track, panel_rows, track_label
+from vehicle_analytics.geometry import Line, Zone
+from vehicle_analytics.render import (
+    draw_lines,
+    draw_panel,
+    draw_track,
+    draw_zones,
+    panel_rows,
+    track_label,
+)
 from vehicle_analytics.speed import SpeedEstimate
 from vehicle_analytics.stats import Stats
 
@@ -32,4 +39,17 @@ def test_drawing_changes_pixels_and_keeps_the_shape():
     draw_track(frame, (100.0, 100.0, 160.0, 150.0), "#1 car", counted=True)
     draw_panel(frame, ["Total: 1"])
     assert frame.shape == (200, 320, 3)
+    assert frame.any()
+
+
+def test_label_shows_live_speed_until_the_zone_speed_is_known():
+    assert track_label("7", "car", None, live_kmph=93.6) == "#7 car ~94 km/h"
+    speed = SpeedEstimate(kmph=102.86, err_kmph=5.34, mode="homography")
+    assert track_label("7", "car", speed, live_kmph=93.6) == "#7 car 102.9 +/- 5.3 km/h"
+
+
+def test_zones_are_drawn():
+    frame = np.zeros((200, 320, 3), dtype=np.uint8)
+    square = ((50.0, 50.0), (150.0, 50.0), (150.0, 150.0), (50.0, 150.0))
+    draw_zones(frame, [Zone("z", "lane", square, "down")])
     assert frame.any()

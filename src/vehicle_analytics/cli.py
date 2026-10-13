@@ -17,6 +17,7 @@ from vehicle_analytics.pipeline import (
     prepare_out_dir,
     run,
 )
+from vehicle_analytics.store import Store, StoreError
 
 USER_ERROR = 2
 
@@ -33,6 +34,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--config", type=Path, required=True)
     run_parser.add_argument("--out", type=Path, help="output folder (default: runs/<video name>)")
     run_parser.add_argument("--no-display", action="store_true", help="do not open a window")
+    run_parser.add_argument(
+        "--db",
+        type=Path,
+        default=Path("data") / "analytics.db",
+        help="SQLite file for vehicle records (default: data/analytics.db)",
+    )
 
     calibrate_parser = commands.add_parser(
         "calibrate", help="print a calibration block from four points on a known road rectangle"
@@ -53,25 +60,28 @@ def _run(args: argparse.Namespace) -> int:
     source = VideoFileSource(args.video)
     out_dir = prepare_out_dir(args.out or Path("runs") / args.video.stem)
 
-    # Imported here so that config and video errors surface before the models load.
-    from vehicle_analytics.detector import YoloDetector
-    from vehicle_analytics.tracking import DeepSortTracker
+    with Store(args.db) as store:
+        # Imported here so that config, video and database errors surface before the models load.
+        from vehicle_analytics.detector import YoloDetector
+        from vehicle_analytics.tracking import DeepSortTracker
 
-    detector = YoloDetector(config.model.weights, config.model.conf, config.model.classes)
-    tracker = DeepSortTracker(
-        config.tracker.max_age, config.tracker.n_init, config.tracker.max_cosine_distance
-    )
-    result = run(
-        source,
-        config,
-        detector,
-        tracker,
-        out_dir,
-        video_name=args.video.name,
-        display=not args.no_display,
-    )
+        detector = YoloDetector(config.model.weights, config.model.conf, config.model.classes)
+        tracker = DeepSortTracker(
+            config.tracker.max_age, config.tracker.n_init, config.tracker.max_cosine_distance
+        )
+        result = run(
+            source,
+            config,
+            detector,
+            tracker,
+            out_dir,
+            video_name=args.video.name,
+            display=not args.no_display,
+            store=store,
+        )
     print(f"frames: {result.frames_processed}  vehicles: {result.summary['total']}")
     print(f"outputs: {result.out_dir}")
+    print(f"database: {args.db} (run {result.summary['run_id']})")
     return 0
 
 
@@ -86,7 +96,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "run":
             return _run(args)
         return _calibrate(args)
-    except (ConfigError, VideoOpenError, FpsError, OutputError, CalibrationError) as exc:
+    except (
+        ConfigError,
+        VideoOpenError,
+        FpsError,
+        OutputError,
+        StoreError,
+        CalibrationError,
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return USER_ERROR
 

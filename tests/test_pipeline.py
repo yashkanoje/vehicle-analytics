@@ -2,6 +2,7 @@ import csv
 import datetime
 import json
 
+import cv2
 import numpy as np
 import pytest
 
@@ -14,6 +15,7 @@ from vehicle_analytics.pipeline import (
     VideoOpenError,
     run,
 )
+from vehicle_analytics.store import Store
 from vehicle_analytics.tracking import Track
 
 SIZE = 200
@@ -142,18 +144,23 @@ def test_output_files(tmp_path):
     assert (out / "annotated.mp4").stat().st_size > 0
 
     with (out / "events.csv").open(newline="", encoding="utf-8") as handle:
-        rows = list(csv.DictReader(handle))
-    assert rows == [
-        {
-            "track_id": "1",
-            "class": "car",
-            "direction": "down",
-            "counted_at_s": "0.550",
-            "speed_kmph": "120.00",
-            "speed_err_kmph": "10.39",
-            "speed_mode": "two_line",
-        }
-    ]
+        (row,) = list(csv.DictReader(handle))
+    snapshot = row.pop("snapshot_path")
+    assert row == {
+        "track_id": "1",
+        "class": "car",
+        "direction": "down",
+        "counted_at_s": "0.550",
+        "speed_kmph": "120.00",
+        "speed_err_kmph": "10.39",
+        "speed_mode": "two_line",
+        "colour": "black",
+        "lane": "",
+        "first_seen_s": "0.100",
+        "last_seen_s": "0.600",
+    }
+    assert snapshot.endswith("out/snapshots/1.jpg")
+    assert (out / "snapshots" / "1.jpg").stat().st_size > 0
 
     summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
     assert summary["video"] == "test.mp4"
@@ -167,7 +174,7 @@ def test_output_files(tmp_path):
 def test_missing_speed_is_written_as_an_empty_cell(tmp_path):
     result = run_script(path_of("6", [100, 130]), 2, tmp_path)
     text = (result.out_dir / "events.csv").read_text(encoding="utf-8")
-    assert text.splitlines()[1] == "6,car,down,0.167,,,"
+    assert text.splitlines()[1].split(",")[:7] == ["6", "car", "down", "0.167", "", "", ""]
 
 
 def test_empty_source_still_writes_outputs(tmp_path):
@@ -276,3 +283,119 @@ def test_video_writer_that_cannot_open_is_an_output_error(tmp_path, monkeypatch)
     monkeypatch.setattr("vehicle_analytics.pipeline.cv2.VideoWriter", ClosedWriter)
     with pytest.raises(OutputError, match="annotated.mp4"):
         run_script({}, 1, tmp_path)
+
+
+LANES = [
+    {
+        "name": "left",
+        "kind": "lane",
+        "polygon": [[0.0, 0.0], [0.5, 0.0], [0.5, 1.0], [0.0, 1.0]],
+        "allowed_direction": "down",
+    },
+    {
+        "name": "right",
+        "kind": "lane",
+        "polygon": [[0.5, 0.0], [1.0, 0.0], [1.0, 1.0], [0.5, 1.0]],
+        "allowed_direction": "down",
+    },
+]
+DOWN = [60, 75, 85, 105, 115, 125]
+
+
+def path_at(track_id, ys, x, start=1):
+    return {start + i: [Track(track_id, box(y, x), "car")] for i, y in enumerate(ys)}
+
+
+@pytest.fixture
+def store(tmp_path):
+    with Store(tmp_path / "db" / "analytics.db") as opened:
+        yield opened
+
+
+def run_with_store(script, n_frames, tmp_path, store, cfg=None, tracker=None):
+    return run(
+        source(n_frames),
+        cfg or config(zones=LANES),
+        NoDetector(),
+        tracker or ScriptedTracker(script),
+        tmp_path / "out",
+        video_name="test.mp4",
+        store=store,
+    )
+
+
+def test_vehicle_row_is_written_with_lane_colour_and_snapshot(tmp_path, store):
+    result = run_with_store(path_at("1", DOWN, x=150.0), 6, tmp_path, store)
+    run_id = result.summary["run_id"]
+    (run_row,) = store.runs()
+    assert (run_row["id"], run_row["video"], run_row["frame_count"]) == (run_id, "test.mp4", 6)
+    (row,) = store.vehicles(run_id)
+    assert (row["track_id"], row["class"], row["direction"]) == ("1", "car", "down")
+    assert (row["lane"], row["colour"]) == ("right", "black")
+    assert row["speed_kmph"] == pytest.approx(120.0)
+    assert (row["first_seen_s"], row["last_seen_s"]) == (0.1, 0.6)
+    assert row["snapshot_path"].endswith("out/snapshots/1.jpg")
+    assert result.records[0].lane == "right"
+
+
+def test_lane_follows_the_side_of_the_road(tmp_path, store):
+    script = {**path_at("1", DOWN, x=50.0), **path_at("2", DOWN, x=150.0, start=7)}
+    result = run_with_store(script, 14, tmp_path, store)
+    lanes = {row["track_id"]: row["lane"] for row in store.vehicles(result.summary["run_id"])}
+    assert lanes == {"1": "left", "2": "right"}
+
+
+def test_lane_is_empty_outside_every_zone(tmp_path, store):
+    one_lane = config(zones=LANES[:1])
+    result = run_with_store(path_at("1", DOWN, x=150.0), 6, tmp_path, store, cfg=one_lane)
+    assert store.vehicles(result.summary["run_id"])[0]["lane"] is None
+    no_zones = run_with_store(path_at("2", DOWN, x=150.0), 6, tmp_path, store, cfg=config())
+    assert store.vehicles(no_zones.summary["run_id"])[0]["lane"] is None
+
+
+def test_vehicle_never_fully_in_frame_has_no_snapshot_or_colour(tmp_path, store):
+    # x = 10 puts the left edge of every box outside the frame.
+    result = run_with_store(path_at("1", DOWN, x=10.0), 6, tmp_path, store)
+    (row,) = store.vehicles(result.summary["run_id"])
+    assert row["snapshot_path"] is None and row["colour"] is None
+    assert not (result.out_dir / "snapshots").exists()
+
+
+def test_only_counted_vehicles_are_stored(tmp_path, store):
+    result = run_with_store(path_at("9", [60, 90], x=150.0), 2, tmp_path, store)
+    assert store.vehicles(result.summary["run_id"]) == []
+    assert not (result.out_dir / "snapshots").exists()
+
+
+def test_second_run_into_the_same_database_adds_a_run(tmp_path, store):
+    first = run_with_store(path_at("1", DOWN, x=150.0), 6, tmp_path, store)
+    second = run_with_store(path_at("1", DOWN, x=150.0), 6, tmp_path, store)
+    assert first.summary["run_id"] != second.summary["run_id"]
+    assert len(store.runs()) == 2
+    assert len(store.vehicles(second.summary["run_id"])) == 1
+
+
+def test_interrupted_run_keeps_its_rows(tmp_path, store):
+    tracker = InterruptingTracker(path_at("1", [110, 130], x=150.0), stop_at=4)
+    result = run_with_store({}, 10, tmp_path, store, tracker=tracker)
+    run_id = result.summary["run_id"]
+    assert [row["track_id"] for row in store.vehicles(run_id)] == ["1"]
+    assert store.runs()[0]["frame_count"] == result.frames_processed
+
+
+def test_snapshot_is_taken_before_the_overlay_is_drawn(tmp_path, store):
+    # Two overlapping boxes: the second crop would contain the first box's outline if
+    # anything were drawn before all crops were taken.
+    script = {
+        frame: [Track("1", box(y, 60.0), "car"), Track("2", box(y, 90.0), "car")]
+        for frame, y in enumerate(DOWN, start=1)
+    }
+    result = run_with_store(script, 6, tmp_path, store)
+    for name in ("1.jpg", "2.jpg"):
+        image = cv2.imread(str(result.out_dir / "snapshots" / name))
+        assert image.max() < 30  # the frames are black; any overlay would be bright
+
+
+def test_run_without_a_store_still_works(tmp_path):
+    result = run_script(path_of("1", DOWN), 6, tmp_path)
+    assert result.summary["run_id"] is None

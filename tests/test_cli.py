@@ -89,3 +89,12 @@ def test_out_path_that_is_a_file_returns_2_before_any_model_loads(
     code = main(["run", str(video_path), "--config", str(config_path), "--out", str(blocker)])
     assert code == 2
     assert "output folder" in capsys.readouterr().err
+
+
+def test_database_path_that_is_a_folder_returns_2(tmp_path, video_path, config_path, capsys):
+    code = main(
+        ["run", str(video_path), "--config", str(config_path), "--out", str(tmp_path / "o"),
+         "--db", str(tmp_path)]
+    )
+    assert code == 2
+    assert "cannot open database" in capsys.readouterr().err
