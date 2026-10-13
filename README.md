@@ -19,6 +19,8 @@ speeds use an estimated distance and are for illustration only.*
   calibration, and reports a one-sigma uncertainty with every speed.
 - Keeps one database row per vehicle: class, colour, lane, direction, times, speed and a
   snapshot.
+- Flags rule violations from the tracks, keeps photo evidence, and drafts a challan PDF for
+  each, for a person to review.
 - Writes an annotated video, a CSV with one row per vehicle, and a JSON summary.
 
 ## How it works
@@ -87,6 +89,8 @@ Outputs go to `runs/<video name>/`:
 | `annotated.mp4` | Boxes, IDs, class, speed ± error, both lines, live counts |
 | `events.csv` | One row per counted vehicle, with the same fields as the `vehicles` table below |
 | `snapshots/` | The largest fully visible crop of each counted vehicle, in a folder per database run |
+| `violations.csv` | One row per violation: rule, measured value, limit, margin, evidence files |
+| `evidence/`, `challans/` | Evidence images and draft challan PDFs, in a folder per database run |
 | `summary.json` | Counts, flow, speed mean / median / max by direction, config used |
 
 ## Records
@@ -159,6 +163,83 @@ Checked by eye from contact sheets of the stored snapshots:
 The thresholds were chosen on this one clip, in low evening light. Treat the column as a
 hint, not a fact. A pale colour (light blue, beige) is reported as grey or white by design.
 
+## Violations and challans
+
+Rules are switched on in the config (`rules`). Each one reads the track of a vehicle and
+fires at most once per vehicle. No learned model is involved after tracking.
+
+| Rule | Fires when | Needs |
+|---|---|---|
+| `overspeed` | speed − 2 × its error bar is above the limit for the vehicle's class | a measured zone speed |
+| `wrong_way` | the vehicle is counted in a lane whose permitted direction is the other one | lane zones |
+| `restricted_zone` | it stays on a hard shoulder or in a restricted zone longer than `min_dwell_s` | such zones |
+| `stopped` | its live speed stays below `stop_speed_kmph` in a lane longer than `min_stop_s` | a calibration and lane zones |
+| `class_lane` | its class is listed in a lane's `banned_classes` and it stays there | lanes with that list |
+
+A rule that the scene cannot support is switched off with a warning, and the run goes on.
+
+**The error bar decides.** A vehicle measured at 110.7 ± 8.2 km/h on a road limited to
+112.7 km/h is not flagged, and neither is one measured at 118 km/h: after two sigma, the
+speed that can be stood behind is still under the limit. The measured value, the limit and
+the margin are stored with the violation, so the decision can be re-derived from the row.
+
+For each violation the frame at that moment (vehicle outlined in red) and the vehicle crop
+are saved before any overlay is drawn, the row goes into `violations`, and a draft challan
+PDF is written: [sample](docs/sample_challan.pdf).
+
+```bash
+vehicle-analytics run VIDEO --config configs/highway.yaml --fines configs/fines_india.yaml
+vehicle-analytics challans --run 1 --fines configs/fines_india.yaml   # redraft later
+```
+
+A vehicle that breaks a rule without ever crossing the count line still gets a `vehicles`
+row, with no direction; it is not in the counts or in `events.csv`.
+
+What a challan is here, and is not:
+
+- It is a **draft for a person to review**, status `pending_review`. Nothing is sent anywhere.
+- It names a vehicle record and its photographs. **No registration number is read**, so it
+  cannot name an owner.
+- Colour is printed as "apparent colour (unverified)".
+- The sections and penalties come from `configs/fines_india.yaml`, an example schedule read
+  from the Motor Vehicles Act, 1988 (India Code text as on 21 May 2025); each entry gives
+  its source. It covers `overspeed` (s. 183), `wrong_way` (s. 184, Explanation (e)) and
+  `stopped` (s. 122 with s. 177). No section was found that clearly fits `restricted_zone`
+  or `class_lane`; their challans print "As per applicable schedule" and no amount.
+- The detector cannot tell a light motor vehicle from a heavy one, so where the penalty
+  depends on that, both are printed and the challan says the legal class was not determined.
+- Every page is marked "Demonstration - not a legal document".
+
+The footage is British and the schedule Indian: the schedule is a configurable example of
+how a jurisdiction's sections are attached, not a claim about where the video was taken.
+
+### What the rules did on the validation clip
+
+With the road's own limit, 70 mph = 112.7 km/h for every class (Highway Code Rule 124),
+and the hard-shoulder and no-stopping rules (Rules 269 and 271):
+
+| Rule | Fired | Notes |
+|---|---|---|
+| `overspeed` | 0 | Fastest vehicle 110.7 ± 8.2 km/h |
+| `wrong_way` | 0 | All 158 vehicles were counted in a lane of their own carriageway |
+| `restricted_zone` | 0 | No vehicle stayed on a hard shoulder for 2 s |
+| `stopped` | 0 | The queuing carriageway moved at 31-46 km/h throughout |
+
+Nothing was flagged. That is a check against false alarms on one minute of ordinary
+traffic, not a measure of how many real violations the rules would catch: `wrong_way`, `restricted_zone` and `stopped` have never fired on real
+footage and are covered only by tests on scripted tracks.
+
+`class_lane` is not switched on for this scene. Highway Code Rule 265 bars vehicles over
+7.5 tonnes from the right-hand lane, but the detector's `truck` covers light vans and heavy
+lorries alike, and the rule would flag vans. For the same reason one speed limit is used
+for every class, although goods vehicles over 7.5 tonnes are limited to 60 mph.
+
+To exercise the challan path, the same clip was run with the limit lowered to 90 km/h
+(`configs/highway_demo_limit.yaml`): 8 vehicles, measured at 105.7 to 110.7 km/h, were
+flagged and 8 challans drafted. Those vehicles were not speeding; that file exists only to
+demonstrate the path. The sample challan linked above comes from the freely licensed demo
+clip instead, with an uncalibrated speed and a limit chosen for illustration.
+
 ## Configure
 
 See [configs/highway.yaml](configs/highway.yaml). All image coordinates are fractions of the
@@ -173,6 +254,7 @@ frame, so a config does not depend on resolution.
 | `calibration` | Four image points and their ground coordinates in metres |
 | `zones` | Named polygons: lanes (with their allowed direction), hard shoulders, restricted areas |
 | `site`, `recording_start` | Where and when the video was recorded, stored with the run |
+| `rules` | Which violations to look for, with their limits and durations |
 | `fps_override` | Frame rate, for files that do not report one |
 
 ## Calibrate
@@ -254,6 +336,13 @@ speed carries the error bar described above.
   the light is not removed. A queue standing on the lanes for more than two seconds, or a
   wet or part-shadowed road, will shift the reference; neither has been tested.
 - Lanes are strips of the fitted ground plane with standard widths, not surveyed lanes.
+- No number plates are read, so a violation is tied to a vehicle record and its photographs,
+  not to an owner.
+- The detector's `truck` class covers light vans and heavy lorries alike; rules that depend
+  on the legal class of a vehicle cannot be applied reliably.
+- Three of the five rules have never fired on real footage.
+- The sample challan uses an uncalibrated clip and a limit chosen for illustration.
+- A database made by an earlier version of this software is refused; use a new file.
 - Not real time: runs of the 1501-frame clip have taken between about three and eight
   minutes on the development laptop's GPU. The pipeline has not been profiled.
 
@@ -271,7 +360,7 @@ with no model and no video.
 
 ## Roadmap
 
-Rule-based violation detection with photo evidence, and a local dashboard.
+A local dashboard for browsing records and reviewing draft challans.
 
 ## Licence
 

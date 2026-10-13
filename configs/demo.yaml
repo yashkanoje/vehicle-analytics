@@ -32,3 +32,12 @@ speed:
   meters_between_lines: 63.0
   distance_rel_uncertainty: 0.20
   jitter_px: 2.0
+
+# ILLUSTRATION ONLY. The limit below is not this road's limit. It is set low so that the
+# sample challan in docs/ can be produced from this freely licensed clip. With speeds that
+# rest on an estimated distance, no vehicle here can be said to have been speeding.
+rules:
+  overspeed:
+    limits_kmph:
+      default: 80.0
+    sigma_margin: 2.0

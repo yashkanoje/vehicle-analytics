@@ -33,6 +33,31 @@ speed:
   distance_rel_uncertainty: 0.05
   jitter_px: 2.0
 
+# Rules. Sources: The Highway Code (gov.uk, last updated 22 October 2025).
+#   Rule 124: national speed limit on motorways is 70 mph for cars, motorcycles and goods
+#     vehicles up to 7.5 tonnes, and 60 mph for goods vehicles over 7.5 tonnes.
+#     70 mph = 112.7 km/h (1 mph = 1.609344 km/h).
+#   Rule 269: a hard shoulder must not be used except in an emergency or when directed.
+#   Rule 271: no stopping on any carriageway or hard shoulder except in an emergency.
+#   https://www.gov.uk/guidance/the-highway-code/general-rules-techniques-and-advice-for-all-drivers-and-riders-103-to-158
+#   https://www.gov.uk/guidance/the-highway-code/motorways-253-to-273
+#
+# One limit is used for every class. The detector's "truck" covers light vans (70 mph) and
+# heavy lorries (60 mph) alike, so the lower limit cannot be applied without flagging vans.
+# For the same reason Rule 265 (vehicles over 7.5 tonnes barred from the right-hand lane)
+# is not switched on: no lane lists banned_classes.
+rules:
+  overspeed:
+    limits_kmph:
+      default: 112.7
+    sigma_margin: 2.0
+  wrong_way:
+  restricted_zone:
+    min_dwell_s: 2.0
+  stopped:
+    stop_speed_kmph: 5.0
+    min_stop_s: 3.0
+
 # Ground-plane calibration from the lane markings.
 #
 # Dimensions (standards for new construction; the road itself was not surveyed):

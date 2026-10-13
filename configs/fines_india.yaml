@@ -1,0 +1,33 @@
+# Sections and penalties printed on draft challans. An example schedule, not legal advice.
+#
+# Source for every entry: The Motor Vehicles Act, 1988 (Act No. 59 of 1988), consolidated
+# text "As on the 21st May, 2025" published by India Code, read on 13 October 2026:
+# https://www.indiacode.nic.in/indiacode/bitstream/123456789/1798/1/aA1988-59.pdf
+# The penalties are those for a first offence. States may notify different compounding
+# amounts under section 200, and may raise penalties under section 210A.
+#
+# A rule with no entry here is printed as "As per applicable schedule". Two rules have none,
+# because no section of the Act was found that clearly fits them:
+#   restricted_zone  (driving or waiting on a hard shoulder or restricted area)
+#   class_lane       (a vehicle class in a lane closed to it)
+#
+# The detector's classes are not the Act's classes: it cannot tell a light motor vehicle
+# from a medium or heavy one. Where the penalty depends on that, both are quoted.
+
+overspeed:
+  section: "Section 183(1)"
+  description: "Driving a motor vehicle in contravention of the speed limits referred to in section 112"
+  penalty: "Light motor vehicle: fine of not less than Rs. 1,000, which may extend to Rs. 2,000. Medium or heavy goods or passenger vehicle: fine of not less than Rs. 2,000, which may extend to Rs. 4,000. The vehicle's legal class was not determined."
+  source: "Motor Vehicles Act, 1988, s. 183(1)(i) and (ii), as substituted by Act 32 of 2019, s. 66"
+
+wrong_way:
+  section: "Section 184, Explanation (e)"
+  description: "Driving dangerously: driving against the authorised flow of traffic"
+  penalty: "First offence: imprisonment for a term which may extend to one year but shall not be less than six months, or fine of not less than Rs. 1,000, which may extend to Rs. 5,000, or both."
+  source: "Motor Vehicles Act, 1988, s. 184 and Explanation (e), as amended by Act 32 of 2019, s. 67"
+
+stopped:
+  section: "Section 122, punishable under section 177"
+  description: "Allowing a vehicle to remain at rest on a public place in a position likely to cause danger, obstruction or undue inconvenience to other users"
+  penalty: "First offence: fine which may extend to Rs. 500."
+  source: "Motor Vehicles Act, 1988, s. 122; s. 177 (general provision for punishment of offences), as amended by Act 32 of 2019"

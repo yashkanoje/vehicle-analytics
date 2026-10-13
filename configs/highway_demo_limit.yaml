@@ -1,0 +1,139 @@
+# DEMONSTRATION ONLY. Identical to highway.yaml except for the speed limit, which is set
+# to 90 km/h, well below the road's real limit of 112.7 km/h, so that the challan path can
+# be exercised on this footage. The vehicles flagged with this file were not speeding.
+#
+# Run configuration for the development clip: a UK motorway seen from an overbridge,
+# 640x360 at 25 fps. All image coordinates are fractions of frame width and height.
+
+model:
+  weights: yolo11s.pt
+  conf: 0.4
+  classes: [car, motorcycle, bus, truck]
+
+tracker:
+  max_age: 30
+  n_init: 3
+  max_cosine_distance: 0.3
+
+# Both lines lie inside the calibrated stretch of road: about 31 m and 2.5 m from the
+# near end of the calibration zone, so the measurement zone is roughly 28.5 m long.
+lines:
+  a: [[0.0, 0.52], [1.0, 0.52]]
+  b: [[0.0, 0.72], [1.0, 0.72]]
+count_line: b
+
+site:
+  name: Motorway overbridge (development clip)
+
+# Label for a crossing of the count line onto its positive side (below it, for a
+# left-to-right line) and onto its negative side.
+directions:
+  positive: down
+  negative: up
+
+speed:
+  # Fallback distance between the lines, used only if the calibration block is removed.
+  meters_between_lines: 28.5
+  distance_rel_uncertainty: 0.05
+  jitter_px: 2.0
+
+# Rules. Sources: The Highway Code (gov.uk, last updated 22 October 2025).
+#   Rule 124: national speed limit on motorways is 70 mph for cars, motorcycles and goods
+#     vehicles up to 7.5 tonnes, and 60 mph for goods vehicles over 7.5 tonnes.
+#     70 mph = 112.7 km/h (1 mph = 1.609344 km/h).
+#   Rule 269: a hard shoulder must not be used except in an emergency or when directed.
+#   Rule 271: no stopping on any carriageway or hard shoulder except in an emergency.
+#   https://www.gov.uk/guidance/the-highway-code/general-rules-techniques-and-advice-for-all-drivers-and-riders-103-to-158
+#   https://www.gov.uk/guidance/the-highway-code/motorways-253-to-273
+#
+# One limit is used for every class. The detector's "truck" covers light vans (70 mph) and
+# heavy lorries (60 mph) alike, so the lower limit cannot be applied without flagging vans.
+# For the same reason Rule 265 (vehicles over 7.5 tonnes barred from the right-hand lane)
+# is not switched on: no lane lists banned_classes.
+rules:
+  overspeed:
+    limits_kmph:
+      default: 90.0   # demonstration value, not the road's limit
+    sigma_margin: 2.0
+  wrong_way:
+  restricted_zone:
+    min_dwell_s: 2.0
+  stopped:
+    stop_speed_kmph: 5.0
+    min_stop_s: 3.0
+
+# Ground-plane calibration from the lane markings.
+#
+# Dimensions (standards for new construction; the road itself was not surveyed):
+#   lane line: 2 m mark + 7 m gap = 9 m module
+#     Traffic Signs Manual, Chapter 5 (2018), Figure 2-3, diagram 1005.1 (speed limit over 40 mph)
+#     https://assets.publishing.service.gov.uk/media/5c4ace6ded915d38a0611abc/traffic-signs-manual-chapter-05.pdf
+#   middle lane of a dual three-lane motorway: 3.70 m (outer lanes 3.65 m)
+#     DMRB CD 127 version 1.0.1, Figure 2.1.1N1a
+#     https://www.standardsforhighways.co.uk/tses/attachments/10442706-b592-42c8-85f8-2a0c779a8e37
+#
+# Method: the centroids of 21 lane-line marks on both carriageways were measured on a
+# vehicle-free median image of the clip, and one ground plane was fitted to all of them by
+# least squares (reprojection error 1.0 px RMS, 1.9 px maximum). The four pairs below are
+# the corners of a 20.13 m x 36 m rectangle on that fitted plane, spanning both carriageways.
+# A first attempt from four corners of a single 3.70 m lane was rejected: it measured the
+# far carriageway 8 % short and 15 % narrow.
+#
+# The measurements and the fit are in tools/fit_highway_calibration.py; running it prints
+# this block and the figures quoted here, and tests/test_calibration_evidence.py checks them.
+#
+# Check against markings not used in the fit: each edge line lies 3.62-3.93 m from the
+# neighbouring lane line, against about 3.75 m expected (3.65 m lane plus half the edge
+# line), on all four sides and with no drift along the road. The 36 m zone measures
+# 35.2-36.7 m along the four lane lines (within 2.2 %); those marks were used in the fit,
+# so that is consistency, not an independent check. distance_rel_uncertainty reflects both.
+calibration:
+  image_points:
+    - [0.1909, 0.7623]
+    - [0.7891, 0.7540]
+    - [0.6263, 0.5052]
+    - [0.3662, 0.5034]
+  ground_points_m:
+    - [-16.43, 0.0]
+    - [3.70, 0.0]
+    - [3.70, 36.0]
+    - [-16.43, 36.0]
+
+# Lanes and hard shoulders as image polygons. Each is a strip of the fitted ground plane
+# with the width given by DMRB CD 127 Figure 2.1.1N1a (lanes 3.65 / 3.70 / 3.65 m, hard
+# shoulder 3.30 m), 40 m long. Printed by tools/fit_highway_calibration.py and checked
+# against it by tests/test_calibration_evidence.py. Lane 1 is the nearside lane.
+# One exception to the stated widths: the near-left corner of up_shoulder falls just
+# outside the frame and is moved to its edge, so that zone is about 2.4 m wide at its
+# near end.
+zones:
+  - name: down_lane_3
+    kind: lane
+    polygon: [[0.5774, 0.7569], [0.6835, 0.7555], [0.5745, 0.4934], [0.5306, 0.493]]
+    allowed_direction: down
+  - name: down_lane_2
+    kind: lane
+    polygon: [[0.6835, 0.7555], [0.7891, 0.754], [0.6188, 0.4937], [0.5745, 0.4934]]
+    allowed_direction: down
+  - name: down_lane_1
+    kind: lane
+    polygon: [[0.7891, 0.754], [0.8915, 0.7526], [0.6621, 0.4941], [0.6188, 0.4937]]
+    allowed_direction: down
+  - name: down_shoulder
+    kind: shoulder
+    polygon: [[0.8915, 0.7526], [0.9826, 0.7513], [0.701, 0.4944], [0.6621, 0.4941]]
+  - name: up_lane_3
+    kind: lane
+    polygon: [[0.3052, 0.7607], [0.4161, 0.7592], [0.4645, 0.4925], [0.4197, 0.4922]]
+    allowed_direction: up
+  - name: up_lane_2
+    kind: lane
+    polygon: [[0.1908, 0.7623], [0.3052, 0.7607], [0.4197, 0.4922], [0.374, 0.4918]]
+    allowed_direction: up
+  - name: up_lane_1
+    kind: lane
+    polygon: [[0.0759, 0.7639], [0.1908, 0.7623], [0.374, 0.4918], [0.3286, 0.4914]]
+    allowed_direction: up
+  - name: up_shoulder
+    kind: shoulder
+    polygon: [[0.0, 0.7654], [0.0759, 0.7639], [0.3286, 0.4914], [0.2872, 0.4911]]
