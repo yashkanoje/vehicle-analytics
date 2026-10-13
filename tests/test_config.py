@@ -282,3 +282,73 @@ def test_live_speed_window_must_be_positive():
     data = with_changes(speed={"meters_between_lines": 10, "live_speed_window_s": 0})
     with pytest.raises(ConfigError, match="'speed.live_speed_window_s'"):
         parse_config(data)
+
+
+RULES = {
+    "overspeed": {"limits_kmph": {"default": 112.7, "truck": 96.6}, "sigma_margin": 2},
+    "wrong_way": None,
+    "restricted_zone": {"min_dwell_s": 4},
+    "stopped": {"stop_speed_kmph": 8, "min_stop_s": 6},
+    "class_lane": {"min_dwell_s": 1},
+}
+
+
+def test_no_rules_are_on_by_default():
+    rules = parse_config(MINIMAL).rules
+    assert rules.overspeed is None and rules.stopped is None
+    assert not rules.wrong_way
+    assert rules.restricted_zone_dwell_s is None and rules.class_lane_dwell_s is None
+
+
+def test_rules_are_parsed():
+    rules = parse_config(with_changes(rules=RULES)).rules
+    assert rules.overspeed.limits_kmph == {"default": 112.7, "truck": 96.6}
+    assert rules.overspeed.sigma_margin == 2.0
+    assert rules.wrong_way
+    assert rules.restricted_zone_dwell_s == 4.0
+    assert (rules.stopped.stop_speed_kmph, rules.stopped.min_stop_s) == (8.0, 6.0)
+    assert rules.class_lane_dwell_s == 1.0
+
+
+def test_a_rule_named_with_no_settings_uses_defaults():
+    named = {
+        "overspeed": {"limits_kmph": {"default": 100}},
+        "restricted_zone": None,
+        "stopped": {},
+        "class_lane": None,
+    }
+    rules = parse_config(with_changes(rules=named)).rules
+    assert rules.overspeed.sigma_margin == 2.0
+    assert rules.restricted_zone_dwell_s == 2.0
+    assert (rules.stopped.stop_speed_kmph, rules.stopped.min_stop_s) == (5.0, 3.0)
+    assert rules.class_lane_dwell_s == 2.0
+    assert not rules.wrong_way
+
+
+@pytest.mark.parametrize(
+    ("bad", "message"),
+    [
+        ("fast", "'rules' must be a mapping"),
+        ({"speeding": {}}, "'rules' has unknown rule"),
+        ({"stopped": []}, "'rules.stopped' must be a mapping"),
+        ({"overspeed": {}}, "'rules.overspeed.limits_kmph' must be a mapping with a 'default'"),
+        (
+            {"overspeed": {"limits_kmph": {"default": 0}}},
+            "'rules.overspeed.limits_kmph.default' must be greater than 0",
+        ),
+        (
+            {"overspeed": {"limits_kmph": {"default": 100}, "sigma_margin": -1}},
+            "'rules.overspeed.sigma_margin'",
+        ),
+        ({"restricted_zone": {"min_dwell_s": -1}}, "'rules.restricted_zone.min_dwell_s'"),
+        (
+            {"class_lane": {"min_dwell_s": "long"}},
+            "'rules.class_lane.min_dwell_s' must be a number",
+        ),
+        ({"stopped": {"stop_speed_kmph": 0}}, "'rules.stopped.stop_speed_kmph'"),
+        ({"stopped": {"min_stop_s": -2}}, "'rules.stopped.min_stop_s'"),
+    ],
+)
+def test_invalid_rules_name_the_key(bad, message):
+    with pytest.raises(ConfigError, match=message):
+        parse_config(with_changes(rules=bad))

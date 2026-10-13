@@ -18,6 +18,7 @@ from vehicle_analytics.geometry import Homography, Line, Point, Zone
 
 DEFAULT_CLASSES = ["car", "motorcycle", "bus", "truck"]
 ZONE_KINDS = ("lane", "shoulder", "restricted")
+RULE_NAMES = ("overspeed", "wrong_way", "restricted_zone", "stopped", "class_lane")
 _REQUIRED = object()
 
 
@@ -57,6 +58,27 @@ class ZoneConfig:
 
 
 @dataclass(frozen=True)
+class OverspeedConfig:
+    limits_kmph: dict[str, float]
+    sigma_margin: float
+
+
+@dataclass(frozen=True)
+class StoppedConfig:
+    stop_speed_kmph: float
+    min_stop_s: float
+
+
+@dataclass(frozen=True)
+class RulesConfig:
+    overspeed: OverspeedConfig | None = None
+    wrong_way: bool = False
+    restricted_zone_dwell_s: float | None = None
+    stopped: StoppedConfig | None = None
+    class_lane_dwell_s: float | None = None
+
+
+@dataclass(frozen=True)
 class CalibrationConfig:
     image_points: tuple[Point, ...]
     ground_points_m: tuple[Point, ...]
@@ -77,6 +99,7 @@ class Config:
     site_name: str | None
     site_location: str | None
     recording_start: datetime | None
+    rules: RulesConfig
     raw: dict[str, Any]
 
     def lines_px(self, width: int, height: int) -> dict[str, Line]:
@@ -298,6 +321,67 @@ def _parse_recording_start(data: dict) -> datetime | None:
     return value
 
 
+def _rule_settings(rules: dict, name: str) -> dict | None:
+    """Settings of one rule: None when the rule is not named, {} when named with no settings."""
+    if name not in rules:
+        return None
+    settings = rules[name]
+    if settings is None:
+        return {}
+    _require(isinstance(settings, dict), f"rules.{name}", "must be a mapping")
+    return settings
+
+
+def _dwell(rules: dict, name: str) -> float | None:
+    settings = _rule_settings(rules, name)
+    if settings is None:
+        return None
+    dwell = _number(settings, f"rules.{name}.min_dwell_s", 2.0)
+    _require(dwell >= 0.0, f"rules.{name}.min_dwell_s", "must not be negative")
+    return dwell
+
+
+def _parse_overspeed(rules: dict) -> OverspeedConfig | None:
+    settings = _rule_settings(rules, "overspeed")
+    if settings is None:
+        return None
+    limits = settings.get("limits_kmph")
+    ok = isinstance(limits, dict) and "default" in limits
+    _require(ok, "rules.overspeed.limits_kmph", "must be a mapping with a 'default' limit")
+    parsed: dict[str, float] = {}
+    for cls_name in limits:
+        path = f"rules.overspeed.limits_kmph.{cls_name}"
+        parsed[str(cls_name)] = _number(limits, path)
+        _require(parsed[str(cls_name)] > 0.0, path, "must be greater than 0")
+    sigma = _number(settings, "rules.overspeed.sigma_margin", 2.0)
+    _require(sigma >= 0.0, "rules.overspeed.sigma_margin", "must not be negative")
+    return OverspeedConfig(limits_kmph=parsed, sigma_margin=sigma)
+
+
+def _parse_stopped(rules: dict) -> StoppedConfig | None:
+    settings = _rule_settings(rules, "stopped")
+    if settings is None:
+        return None
+    speed = _number(settings, "rules.stopped.stop_speed_kmph", 5.0)
+    duration = _number(settings, "rules.stopped.min_stop_s", 3.0)
+    _require(speed > 0.0, "rules.stopped.stop_speed_kmph", "must be greater than 0")
+    _require(duration >= 0.0, "rules.stopped.min_stop_s", "must not be negative")
+    return StoppedConfig(stop_speed_kmph=speed, min_stop_s=duration)
+
+
+def _parse_rules(data: dict) -> RulesConfig:
+    rules = _section(data, "rules")
+    unknown = [str(name) for name in rules if name not in RULE_NAMES]
+    _require(not unknown, "rules", f"has unknown rule(s): {', '.join(unknown)}")
+    return RulesConfig(
+        overspeed=_parse_overspeed(rules),
+        wrong_way=_rule_settings(rules, "wrong_way") is not None,
+        restricted_zone_dwell_s=_dwell(rules, "restricted_zone"),
+        stopped=_parse_stopped(rules),
+        class_lane_dwell_s=_dwell(rules, "class_lane"),
+    )
+
+
 def parse_config(data: Any) -> Config:
     if not isinstance(data, dict):
         raise ConfigError("config file must contain a mapping at the top level")
@@ -328,6 +412,7 @@ def parse_config(data: Any) -> Config:
         site_name=_optional_text(site, "site.name"),
         site_location=_optional_text(site, "site.location"),
         recording_start=_parse_recording_start(data),
+        rules=_parse_rules(data),
         raw=data,
     )
 
