@@ -1,0 +1,30 @@
+# Run configuration for the development clip: a motorway seen from an overbridge,
+# 640x360 at 25 fps. All image coordinates are fractions of frame width and height.
+
+model:
+  weights: yolo11s.pt
+  conf: 0.4
+  classes: [car, motorcycle, bus, truck]
+
+tracker:
+  max_age: 30
+  n_init: 3
+  max_cosine_distance: 0.3
+
+lines:
+  a: [[0.0, 0.45], [1.0, 0.45]]
+  b: [[0.0, 0.65], [1.0, 0.65]]
+count_line: b
+
+# Label for a crossing of the count line onto its positive side (below it, for a
+# left-to-right line) and onto its negative side.
+directions:
+  positive: down
+  negative: up
+
+speed:
+  # Assumed ground distance between the two lines. Used only while there is no
+  # calibration block; a calibration takes precedence.
+  meters_between_lines: 10.0
+  distance_rel_uncertainty: 0.05
+  jitter_px: 2.0
