@@ -93,8 +93,58 @@ def test_out_path_that_is_a_file_returns_2_before_any_model_loads(
 
 def test_database_path_that_is_a_folder_returns_2(tmp_path, video_path, config_path, capsys):
     code = main(
-        ["run", str(video_path), "--config", str(config_path), "--out", str(tmp_path / "o"),
-         "--db", str(tmp_path)]
+        [
+            "run",
+            str(video_path),
+            "--config",
+            str(config_path),
+            "--out",
+            str(tmp_path / "o"),
+            "--db",
+            str(tmp_path),
+        ]
     )
     assert code == 2
     assert "cannot open database" in capsys.readouterr().err
+
+
+def test_challans_for_an_unknown_run_returns_2(tmp_path, capsys):
+    code = main(["challans", "--run", "99", "--db", str(tmp_path / "a.db")])
+    assert code == 2
+    assert "no run 99" in capsys.readouterr().err
+
+
+def test_challans_with_a_missing_fines_file_returns_2(tmp_path, capsys):
+    code = main(
+        [
+            "challans",
+            "--run",
+            "1",
+            "--db",
+            str(tmp_path / "a.db"),
+            "--fines",
+            str(tmp_path / "f.yaml"),
+        ]
+    )
+    assert code == 2
+    assert "fines file not found" in capsys.readouterr().err
+
+
+def test_challans_command_drafts_pdfs_for_a_stored_run(tmp_path, capsys):
+    from vehicle_analytics.rules import Violation
+    from vehicle_analytics.state import VehicleRecord
+    from vehicle_analytics.store import Store
+
+    db = tmp_path / "a.db"
+    with Store(db) as store:
+        run_id = store.start_run("clip.mp4", 25.0, {})
+        car = store.add_vehicle(
+            run_id, VehicleRecord("7", "car", "down", 1.5, 121.4, 9.0, "two_line")
+        )
+        store.add_violation(
+            car, Violation("overspeed", 12.5, 121.4, 100.0, 18.0, "km/h"), None, None
+        )
+    code = main(["challans", "--run", str(run_id), "--db", str(db), "--out", str(tmp_path / "o")])
+    assert code == 0
+    assert (tmp_path / "o" / "challans" / str(run_id) / f"VA-{run_id}-0001.pdf").is_file()
+    assert "1 challan" in capsys.readouterr().out

@@ -1,6 +1,7 @@
 import csv
 import datetime
 import json
+import logging
 from pathlib import Path
 
 import cv2
@@ -480,7 +481,7 @@ def test_live_speed_is_shown_only_once_the_vehicle_is_fully_in_view(tmp_path, mo
     labels = []
     monkeypatch.setattr(
         "vehicle_analytics.pipeline.render.draw_track",
-        lambda frame, box_xyxy, label, counted: labels.append(label),
+        lambda frame, box_xyxy, label, counted, violating=False: labels.append(label),
     )
     flat = {  # the whole frame is 20 m x 20 m: 0.1 m per pixel
         "image_points": [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
@@ -489,3 +490,113 @@ def test_live_speed_is_shown_only_once_the_vehicle_is_fully_in_view(tmp_path, mo
     # The first two boxes reach above the top of the frame.
     run_script(path_of("1", [20, 25, 40, 50, 60]), 5, tmp_path, cfg=config(calibration=flat))
     assert labels == ["#1 car", "#1 car", "#1 car", "#1 car ~36 km/h", "#1 car ~36 km/h"]
+
+
+SHOULDER_ZONE = {
+    "name": "hs",
+    "kind": "shoulder",
+    "polygon": [[0.5, 0.0], [1.0, 0.0], [1.0, 1.0], [0.5, 1.0]],
+}
+
+
+def overspeed(limit):
+    return {"overspeed": {"limits_kmph": {"default": limit}, "sigma_margin": 2}}
+
+
+def test_overspeed_fires_only_beyond_the_error_margin(tmp_path, store):
+    # The scripted car does 120.0 +/- 10.39 km/h, so its floor at two sigma is 99.2 km/h.
+    within = run_with_store(
+        path_at("1", DOWN, x=150.0), 6, tmp_path, store, cfg=config(rules=overspeed(100))
+    )
+    assert within.violations == [] and within.summary["violations"] == {}
+    beyond = run_with_store(
+        path_at("1", DOWN, x=150.0), 6, tmp_path, store, cfg=config(rules=overspeed(99))
+    )
+    (violation,) = beyond.violations
+    assert (violation.rule, violation.limit_value) == ("overspeed", 99.0)
+    assert violation.measured == pytest.approx(120.0)
+    assert violation.margin == pytest.approx(2 * 10.3923, abs=1e-3)
+    assert beyond.summary["violations"] == {"overspeed": 1}
+
+
+def test_violation_is_stored_with_evidence(tmp_path, store):
+    result = run_with_store(
+        path_at("1", DOWN, x=150.0), 6, tmp_path, store, cfg=config(rules=overspeed(50))
+    )
+    run_id = result.summary["run_id"]
+    (row,) = store.violations(run_id)
+    assert (row["rule"], row["track_id"], row["class"]) == ("overspeed", "1", "car")
+    assert row["evidence_path"].endswith(f"out/evidence/{run_id}/1_overspeed_frame.jpg")
+    crop = cv2.imread(row["crop_path"])
+    assert crop.shape == (30, 40, 3) and crop.max() < 30  # taken before anything was drawn
+    marked = cv2.imread(row["evidence_path"])
+    assert marked[:, :, 2].max() > 200  # the red outline
+
+
+def test_violations_csv(tmp_path, store):
+    result = run_with_store(
+        path_at("1", DOWN, x=150.0), 6, tmp_path, store, cfg=config(rules=overspeed(50))
+    )
+    with (result.out_dir / "violations.csv").open(newline="", encoding="utf-8") as handle:
+        (row,) = list(csv.DictReader(handle))
+    assert (row["track_id"], row["class"], row["rule"], row["zone"]) == (
+        "1",
+        "car",
+        "overspeed",
+        "",
+    )
+    assert (row["measured"], row["limit_value"], row["unit"]) == ("120.00", "50.00", "km/h")
+    assert row["evidence_path"].endswith("1_overspeed_frame.jpg")
+
+
+def test_no_rules_writes_an_empty_violations_file(tmp_path):
+    result = run_script(path_of("1", DOWN), 6, tmp_path)
+    text = (result.out_dir / "violations.csv").read_text(encoding="utf-8")
+    assert text.splitlines() == [
+        "track_id,class,rule,zone,at_s,measured,limit_value,margin,unit,evidence_path,crop_path"
+    ]
+    assert result.summary["violations"] == {} and result.summary["rules_disabled"] == {}
+
+
+def test_wrong_way_in_a_lane(tmp_path, store):
+    against = [{**LANES[0], "allowed_direction": "up"}, {**LANES[1], "allowed_direction": "up"}]
+    cfg = config(zones=against, rules={"wrong_way": None})
+    result = run_with_store(path_at("1", DOWN, x=150.0), 6, tmp_path, store, cfg=cfg)
+    (violation,) = result.violations
+    assert (violation.rule, violation.zone) == ("wrong_way", "right")
+    assert violation.at_s == pytest.approx(0.6)
+
+
+def test_uncounted_violator_is_stored_but_not_counted(tmp_path, store):
+    # A vehicle waits on the shoulder above line a for 3 s and never reaches the count line.
+    cfg = config(zones=[SHOULDER_ZONE], rules={"restricted_zone": {"min_dwell_s": 2}})
+    script = {frame: [Track("1", box(50, 150.0), "truck")] for frame in range(1, 31)}
+    result = run_with_store(script, 32, tmp_path, store, cfg=cfg)
+    assert result.records == [] and result.summary["total"] == 0
+    assert [v.rule for v in result.violations] == ["restricted_zone"]
+    run_id = result.summary["run_id"]
+    (vehicle,) = store.vehicles(run_id)
+    assert (vehicle["track_id"], vehicle["class"], vehicle["direction"]) == ("1", "truck", None)
+    (violation,) = store.violations(run_id)
+    assert (violation["zone"], violation["measured"], violation["at_s"]) == ("hs", 2.0, 2.1)
+    assert (result.out_dir / "events.csv").read_text(encoding="utf-8").count("\n") == 1
+
+
+def test_unsupported_rule_is_disabled_and_reported(tmp_path, caplog):
+    cfg = config(rules={"stopped": {}, **overspeed(50)})
+    with caplog.at_level(logging.WARNING, logger="vehicle_analytics.pipeline"):
+        result = run_script(path_of("1", DOWN), 6, tmp_path, cfg=cfg)
+    assert list(result.summary["rules_disabled"]) == ["stopped"]
+    assert "calibration" in result.summary["rules_disabled"]["stopped"]
+    assert "rule 'stopped' is disabled" in caplog.text
+    assert [v.rule for v in result.violations] == ["overspeed"]
+
+
+def test_violator_is_drawn_in_red_from_the_frame_it_is_caught(tmp_path, monkeypatch):
+    flags = []
+    monkeypatch.setattr(
+        "vehicle_analytics.pipeline.render.draw_track",
+        lambda frame, box_xyxy, label, counted, violating=False: flags.append(violating),
+    )
+    run_script(path_of("1", DOWN), 6, tmp_path, cfg=config(rules=overspeed(50)))
+    assert flags == [False, False, False, False, False, True]

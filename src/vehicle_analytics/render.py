@@ -14,6 +14,7 @@ from vehicle_analytics.stats import Stats
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 LINE_COLOURS = {"a": (0, 0, 255), "b": (255, 0, 0)}
 COUNTED_COLOUR = (0, 255, 0)
+VIOLATION_COLOUR = (0, 0, 255)
 TRACKING_COLOUR = (255, 160, 0)
 
 
@@ -54,9 +55,18 @@ def draw_lines(frame: np.ndarray, lines: Iterable[Line]) -> None:
         cv2.line(frame, p1, p2, LINE_COLOURS.get(line.name, (0, 255, 255)), 2)
 
 
-def draw_track(frame: np.ndarray, box_xyxy: Sequence[float], label: str, counted: bool) -> None:
+def draw_track(
+    frame: np.ndarray,
+    box_xyxy: Sequence[float],
+    label: str,
+    counted: bool,
+    violating: bool = False,
+) -> None:
     x1, y1, x2, y2 = (round(v) for v in box_xyxy)
-    colour = COUNTED_COLOUR if counted else TRACKING_COLOUR
+    if violating:
+        colour = VIOLATION_COLOUR
+    else:
+        colour = COUNTED_COLOUR if counted else TRACKING_COLOUR
     cv2.rectangle(frame, (x1, y1), (x2, y2), colour, 2)
     cv2.circle(frame, ((x1 + x2) // 2, y2), 4, (0, 255, 255), -1)
     cv2.putText(frame, label, (x1, max(y1 - 6, 12)), FONT, 0.5, colour, 2)

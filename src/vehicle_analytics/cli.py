@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 from vehicle_analytics.calibrate import CalibrationError, calibration_yaml
+from vehicle_analytics.challan import generate_for_run, load_fines
 from vehicle_analytics.config import ConfigError, load_config
 from vehicle_analytics.pipeline import (
     FpsError,
@@ -40,6 +42,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("data") / "analytics.db",
         help="SQLite file for vehicle records (default: data/analytics.db)",
     )
+    run_parser.add_argument(
+        "--fines", type=Path, help="YAML file of sections and penalties, printed on the challans"
+    )
 
     calibrate_parser = commands.add_parser(
         "calibrate", help="print a calibration block from four points on a known road rectangle"
@@ -52,11 +57,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="'x,y x,y x,y x,y' in pixels: near-left, near-right, far-right, far-left; "
         "omit to click them",
     )
+
+    challans_parser = commands.add_parser(
+        "challans", help="draft or refresh the challan PDFs of a stored run"
+    )
+    challans_parser.add_argument("--run", type=int, required=True, help="run id in the database")
+    challans_parser.add_argument("--db", type=Path, default=Path("data") / "analytics.db")
+    challans_parser.add_argument("--out", type=Path, help="default: runs/<video name of the run>")
+    challans_parser.add_argument("--fines", type=Path)
     return parser
 
 
 def _run(args: argparse.Namespace) -> int:
     config = load_config(args.config)
+    fines = load_fines(args.fines) if args.fines else {}
     source = VideoFileSource(args.video)
     out_dir = prepare_out_dir(args.out or Path("runs") / args.video.stem)
 
@@ -79,7 +93,9 @@ def _run(args: argparse.Namespace) -> int:
             display=not args.no_display,
             store=store,
         )
+        challans = generate_for_run(store, result.summary["run_id"], fines, out_dir)
     print(f"frames: {result.frames_processed}  vehicles: {result.summary['total']}")
+    print(f"violations: {len(result.violations)}  challans drafted: {len(challans)}")
     print(f"outputs: {result.out_dir}")
     print(f"database: {args.db} (run {result.summary['run_id']})")
     return 0
@@ -90,12 +106,25 @@ def _calibrate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _challans(args: argparse.Namespace) -> int:
+    fines = load_fines(args.fines) if args.fines else {}
+    with Store(args.db) as store:
+        if not store.has_run(args.run):
+            raise StoreError(f"no run {args.run} in {args.db}")
+        video = next(row["video"] for row in store.runs() if row["id"] == args.run)
+        out_dir = prepare_out_dir(args.out or Path("runs") / Path(video).stem)
+        paths = generate_for_run(store, args.run, fines, out_dir)
+    plural = "challan" if len(paths) == 1 else "challans"
+    print(f"{len(paths)} {plural} in {out_dir / 'challans' / str(args.run)}")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    logging.basicConfig(level=logging.WARNING, format="warning: %(message)s")
     args = build_parser().parse_args(argv)
+    handlers = {"run": _run, "calibrate": _calibrate, "challans": _challans}
     try:
-        if args.command == "run":
-            return _run(args)
-        return _calibrate(args)
+        return handlers[args.command](args)
     except (
         ConfigError,
         VideoOpenError,
@@ -106,7 +135,3 @@ def main(argv: Sequence[str] | None = None) -> int:
     ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return USER_ERROR
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

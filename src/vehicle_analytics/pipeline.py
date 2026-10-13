@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
+from collections import Counter
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,12 +25,16 @@ from vehicle_analytics.attributes import (
 )
 from vehicle_analytics.config import Config
 from vehicle_analytics.detector import Detection
+from vehicle_analytics.evidence import save_evidence
 from vehicle_analytics.geometry import reference_point
+from vehicle_analytics.rules import Violation, build_rules
 from vehicle_analytics.speed import zone_speed
 from vehicle_analytics.state import TrackState, VehicleRecord
 from vehicle_analytics.stats import Stats
 from vehicle_analytics.store import Store, StoreError
 from vehicle_analytics.tracking import Track
+
+logger = logging.getLogger(__name__)
 
 WINDOW_TITLE = "vehicle-analytics (Esc to stop)"
 ESC_KEY = 27
@@ -46,6 +52,21 @@ EVENT_COLUMNS = [
     "last_seen_s",
     "snapshot_path",
 ]
+VIOLATION_COLUMNS = [
+    "track_id",
+    "class",
+    "rule",
+    "zone",
+    "at_s",
+    "measured",
+    "limit_value",
+    "margin",
+    "unit",
+    "evidence_path",
+    "crop_path",
+]
+# A violation with the vehicle it belongs to and its two evidence images.
+ViolationRow = tuple[VehicleRecord, Violation, str | None, str | None]
 
 
 class VideoOpenError(RuntimeError):
@@ -116,13 +137,19 @@ class RunResult:
     summary: dict[str, Any]
     out_dir: Path
     frames_processed: int
+    violations: list[Violation]
 
 
 def _cell(value: float | None, digits: int) -> str:
     return "" if value is None else f"{value:.{digits}f}"
 
 
-def write_outputs(out_dir: Path, records: Sequence[VehicleRecord], summary: dict) -> None:
+def write_outputs(
+    out_dir: Path,
+    records: Sequence[VehicleRecord],
+    summary: dict,
+    violations: Sequence[ViolationRow] = (),
+) -> None:
     with (out_dir / "events.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(EVENT_COLUMNS)
@@ -141,6 +168,25 @@ def write_outputs(out_dir: Path, records: Sequence[VehicleRecord], summary: dict
                     _cell(record.first_seen_s, 3),
                     _cell(record.last_seen_s, 3),
                     record.snapshot_path or "",
+                ]
+            )
+    with (out_dir / "violations.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(VIOLATION_COLUMNS)
+        for record, violation, frame_path, crop_path in violations:
+            writer.writerow(
+                [
+                    record.track_id,
+                    record.cls_name,
+                    violation.rule,
+                    violation.zone or "",
+                    _cell(violation.at_s, 3),
+                    _cell(violation.measured, 2),
+                    _cell(violation.limit_value, 2),
+                    _cell(violation.margin, 2),
+                    violation.unit or "",
+                    frame_path or "",
+                    crop_path or "",
                 ]
             )
     # default=str: a config may hold values JSON has no type for, such as YAML dates.
@@ -181,6 +227,11 @@ def run(
     road = RoadReference(zones, source.width, source.height)
     homography = config.homography_px(source.width, source.height)
     to_ground = homography.to_ground if homography is not None else None
+    rules, rules_disabled = build_rules(
+        config.rules, zones, fps, homography is not None, config.speed.live_speed_window_s
+    )
+    for name, reason in rules_disabled.items():
+        logger.warning("rule '%s' is disabled: %s", name, reason)
     video_path = out_dir / "annotated.mp4"
     writer = cv2.VideoWriter(
         str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (source.width, source.height)
@@ -203,10 +254,17 @@ def run(
         )
 
     states: dict[str, TrackState] = {}
+    caught: dict[str, list[tuple[Violation, str | None, str | None]]] = {}
     records: list[VehicleRecord] = []
+    violation_rows: list[ViolationRow] = []
     stats = Stats()
     frame_index = 0
     write_error: Exception | None = None
+
+    def run_folder(name: str) -> Path:
+        """<out>/<name>/, with a folder per database run so that a later run into the same
+        output folder cannot replace the files an earlier run's rows point at."""
+        return prepare_out_dir(out_dir / name / (str(run_id) if run_id is not None else ""))
 
     def save_snapshot(state: TrackState) -> str | None:
         if state.snapshot is None:
@@ -215,28 +273,32 @@ def run(
         if not ok:
             return None
         # Written through Python, not cv2.imwrite, which fails on non-ASCII paths on Windows.
-        # One folder per database run, so a later run into the same output folder cannot
-        # replace the images an earlier run's rows point at.
-        folder = out_dir / "snapshots" / (str(run_id) if run_id is not None else "")
-        path = prepare_out_dir(folder) / f"{state.track_id}.jpg"
+        path = run_folder("snapshots") / f"{state.track_id}.jpg"
         path.write_bytes(encoded.tobytes())
         return path.as_posix()
 
     def finalise(track_id: str) -> None:
         state = states.pop(track_id)
-        if not state.counted:
+        found = caught.pop(track_id, [])
+        for rule in rules:
+            rule.forget(track_id)
+        if not state.counted and not found:
             return
-        record = state.to_record(fps, save_snapshot(state))
-        records.append(record)
-        stats.record_vehicle(record)
+        record = state.to_record(fps, save_snapshot(state), include_uncounted=True)
+        if state.counted:
+            records.append(record)
+            stats.record_vehicle(record)
+        violation_rows.extend((record, violation, *paths) for violation, *paths in found)
         if store is not None:
-            store.add_vehicle(run_id, record)
+            vehicle_id = store.add_vehicle(run_id, record)
+            for violation, frame_path, crop_path in found:
+                store.add_violation(vehicle_id, violation, frame_path, crop_path)
 
     try:
         for frame_index, frame in enumerate(source, start=1):
             tracks = tracker.update(detector.detect(frame), frame)
 
-            # First pass: measure. Crops are taken before anything is drawn on the frame.
+            # First pass: measure. Crops and evidence are taken before anything is drawn.
             road_bgr = road.colour(frame)
             for track in tracks:
                 state = states.setdefault(track.track_id, TrackState(track.track_id))
@@ -273,6 +335,12 @@ def run(
                         crop = crop_box(frame, track.box_xyxy)
                         if crop.size:  # a box under a pixel wide has no pixels
                             state.add_appearance(area, colour_name(crop, road_bgr), crop)
+                for rule in rules:
+                    violation = rule.update(state, frame_index / fps)
+                    if violation is not None:
+                        stem = f"{track.track_id}_{violation.rule}"
+                        paths = save_evidence(frame, track.box_xyxy, run_folder("evidence"), stem)
+                        caught.setdefault(track.track_id, []).append((violation, *paths))
 
             # Second pass: draw.
             render.draw_zones(frame, zones)
@@ -280,7 +348,8 @@ def run(
                 state = states[track.track_id]
                 live = state.live_speed_kmph(fps, config.speed.live_speed_window_s)
                 label = render.track_label(track.track_id, state.cls_name, state.speed, live)
-                render.draw_track(frame, track.box_xyxy, label, state.counted)
+                violating = track.track_id in caught
+                render.draw_track(frame, track.box_xyxy, label, state.counted, violating)
 
             # The tracker forgets a vehicle after max_age unmatched frames; so do we.
             lost = [
@@ -321,9 +390,11 @@ def run(
             "frames_processed": frame_index,
             "elapsed_s": round(elapsed_s, 3),
             **stats.summary(elapsed_s),
+            "violations": dict(Counter(violation.rule for _, violation, _, _ in violation_rows)),
+            "rules_disabled": rules_disabled,
             "config": config.raw,
         }
-        write_outputs(out_dir, records, summary)
+        write_outputs(out_dir, records, summary, violation_rows)
         if store is not None:
             try:
                 store.finish_run(run_id, frame_index)
@@ -333,5 +404,9 @@ def run(
     if write_error is not None:
         raise write_error
     return RunResult(
-        records=records, summary=summary, out_dir=out_dir, frames_processed=frame_index
+        records=records,
+        summary=summary,
+        out_dir=out_dir,
+        frames_processed=frame_index,
+        violations=[violation for _, violation, _, _ in violation_rows],
     )

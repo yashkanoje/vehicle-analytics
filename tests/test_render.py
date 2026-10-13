@@ -53,3 +53,10 @@ def test_zones_are_drawn():
     square = ((50.0, 50.0), (150.0, 50.0), (150.0, 150.0), (50.0, 150.0))
     draw_zones(frame, [Zone("z", "lane", square, "down")])
     assert frame.any()
+
+
+def test_a_violating_vehicle_is_drawn_in_red():
+    frame = np.zeros((200, 320, 3), dtype=np.uint8)
+    draw_track(frame, (100.0, 100.0, 160.0, 150.0), "#1 car", counted=True, violating=True)
+    blue, green, red = (int(v) for v in frame[100, 130])
+    assert red > 200 and green < 60 and blue < 60
