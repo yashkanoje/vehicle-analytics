@@ -78,3 +78,13 @@ def test_record_with_speed():
     state.mark_counted("up", 2.0)
     state.speed = SpeedEstimate(kmph=101.5, err_kmph=6.2, mode="two_line")
     assert state.to_record() == VehicleRecord("1", "car", "up", 2.0, 101.5, 6.2, "two_line")
+
+
+def test_observe_passes_the_ground_mapping_to_crossing_detection():
+    def to_ground(p):
+        return (p[0], 1000.0 / p[1])
+
+    state = TrackState("1")
+    state.observe(0, (100.0, 50.0), "car", [A], to_ground)
+    (event,) = state.observe(10, (100.0, 200.0), "car", [A], to_ground)
+    assert event.frame_time == pytest.approx(5.0)  # 20 m -> 12.5 m -> 5 m

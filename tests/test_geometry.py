@@ -64,3 +64,17 @@ def test_homography_rejects_repeated_ground_points():
     repeated = [(0.0, 0.0), (4.0, 0.0), (4.0, 0.0), (0.0, 20.0)]
     with pytest.raises(ValueError, match="collinear"):
         Homography.from_points(IMAGE, repeated)
+
+
+def test_homography_rejects_corners_given_out_of_order():
+    crossed = [IMAGE[0], IMAGE[1], IMAGE[3], IMAGE[2]]
+    with pytest.raises(ValueError, match="in order around"):
+        Homography.from_points(crossed, GROUND)
+    with pytest.raises(ValueError, match="in order around"):
+        Homography.from_points(IMAGE, [GROUND[0], GROUND[2], GROUND[1], GROUND[3]])
+
+
+def test_homography_rejects_non_finite_points():
+    bad = [(0.0, 0.0), (4.0, 0.0), (4.0, float("nan")), (0.0, 20.0)]
+    with pytest.raises(ValueError, match="finite"):
+        Homography.from_points(IMAGE, bad)

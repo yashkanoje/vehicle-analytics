@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
 from vehicle_analytics.crossing import CrossingEvent, detect_crossing
@@ -47,7 +47,12 @@ class TrackState:
         return self.direction is not None
 
     def observe(
-        self, frame_index: int, point: Point, cls_name: str, lines: Iterable[Line]
+        self,
+        frame_index: int,
+        point: Point,
+        cls_name: str,
+        lines: Iterable[Line],
+        to_ground: Callable[[Point], Point] | None = None,
     ) -> list[CrossingEvent]:
         """Add one observation and return the lines newly crossed by it."""
         new_events: list[CrossingEvent] = []
@@ -56,7 +61,9 @@ class TrackState:
             for line in lines:
                 if line.name in self.crossings:
                     continue
-                event = detect_crossing(line, self.track_id, p_prev, point, k_prev, frame_index)
+                event = detect_crossing(
+                    line, self.track_id, p_prev, point, k_prev, frame_index, to_ground
+                )
                 if event is not None:
                     self.crossings[line.name] = event
                     new_events.append(event)

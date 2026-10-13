@@ -79,3 +79,13 @@ def test_calibrate_with_bad_points_returns_2(video_path, capsys):
     )
     assert code == 2
     assert "four 'x,y' pairs" in capsys.readouterr().err
+
+
+def test_out_path_that_is_a_file_returns_2_before_any_model_loads(
+    tmp_path, video_path, config_path, capsys
+):
+    blocker = tmp_path / "taken"
+    blocker.write_text("not a folder", encoding="utf-8")
+    code = main(["run", str(video_path), "--config", str(config_path), "--out", str(blocker)])
+    assert code == 2
+    assert "output folder" in capsys.readouterr().err

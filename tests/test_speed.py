@@ -1,5 +1,6 @@
 import math
 
+import numpy as np
 import pytest
 
 from vehicle_analytics.crossing import CrossingEvent
@@ -77,3 +78,16 @@ def test_same_crossing_point_gives_no_speed():
 def test_a_distance_source_is_required():
     with pytest.raises(ValueError, match="meters_between_lines or a homography"):
         zone_speed(A, B, 30.0)
+
+
+def test_homography_error_bar_uses_the_ground_scale_at_each_crossing():
+    # Perspective along the direction of travel: ground y = 1000 / image y, so a
+    # pixel covers far more road at the far line than at the near one.
+    h = Homography(np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1000.0], [0.0, 1.0, 0.0]]))
+    a = event("a", 0.0, (0.0, 50.0))  # 20 m out
+    b = event("b", 9.0, (0.0, 200.0))  # 5 m out
+    speed = zone_speed(a, b, 30.0, homography=h, jitter_px=2.0, distance_rel_uncertainty=0.0)
+    assert speed.kmph == pytest.approx(15.0 / 0.3 * 3.6)
+    at_a = 20.0 - 1000.0 / 52.0
+    at_b = 5.0 - 1000.0 / 202.0
+    assert speed.err_kmph == pytest.approx(speed.kmph * math.hypot(at_a, at_b) / 15.0, rel=1e-6)

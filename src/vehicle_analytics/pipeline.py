@@ -42,6 +42,10 @@ class FpsError(RuntimeError):
     """The video reports no usable frame rate and the config gives no override."""
 
 
+class OutputError(RuntimeError):
+    """The output folder or the annotated video cannot be written."""
+
+
 class Detector(Protocol):
     def detect(self, frame: np.ndarray) -> list[Detection]: ...
 
@@ -120,7 +124,21 @@ def write_outputs(out_dir: Path, records: Sequence[VehicleRecord], summary: dict
                     record.speed_mode or "",
                 ]
             )
-    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    # default=str: a config may hold values JSON has no type for, such as YAML dates.
+    text = json.dumps(summary, indent=2, default=str)
+    (out_dir / "summary.json").write_text(text, encoding="utf-8")
+
+
+def prepare_out_dir(out_dir: str | Path) -> Path:
+    """Create the output folder, or say why it cannot be created."""
+    out_dir = Path(out_dir)
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except (FileExistsError, NotADirectoryError) as exc:
+        raise OutputError(
+            f"output folder cannot be created, a file is in the way: {out_dir}"
+        ) from exc
+    return out_dir
 
 
 def run(
@@ -137,16 +155,19 @@ def run(
     if not fps or fps <= 0.0:
         raise FpsError("video reports no frame rate; set 'fps_override' in the config")
 
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = prepare_out_dir(out_dir)
     lines = config.lines_px(source.width, source.height)
     homography = config.homography_px(source.width, source.height)
+    to_ground = homography.to_ground if homography is not None else None
+    video_path = out_dir / "annotated.mp4"
     writer = cv2.VideoWriter(
-        str(out_dir / "annotated.mp4"),
-        cv2.VideoWriter_fourcc(*"mp4v"),
-        fps,
-        (source.width, source.height),
+        str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (source.width, source.height)
     )
+    if not writer.isOpened():
+        raise OutputError(
+            f"cannot write {video_path}: the video writer did not open "
+            f"(frame size {source.width}x{source.height}, codec mp4v)"
+        )
 
     states: dict[str, TrackState] = {}
     records: list[VehicleRecord] = []
@@ -166,7 +187,10 @@ def run(
             for track in tracks:
                 state = states.setdefault(track.track_id, TrackState(track.track_id))
                 point = reference_point(track.box_xyxy)
-                for event in state.observe(frame_index, point, track.cls_name, lines.values()):
+                events = state.observe(
+                    frame_index, point, track.cls_name, lines.values(), to_ground
+                )
+                for event in events:
                     if event.line_name == config.count_line:
                         direction = config.direction_label(event.side_to)
                         state.mark_counted(direction, event.frame_time / fps)

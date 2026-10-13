@@ -6,6 +6,7 @@ config does not depend on the video's resolution.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -100,6 +101,8 @@ def _number(section: dict, path: str, default: Any = _REQUIRED) -> Any:
         return default
     if not _is_number(value):
         raise ConfigError(f"config key '{path}' must be a number, got {type(value).__name__}")
+    if not math.isfinite(value):
+        raise ConfigError(f"config key '{path}' must be a finite number")
     return float(value)
 
 
@@ -111,6 +114,7 @@ def _require(condition: bool, path: str, rule: str) -> None:
 def _point(value: Any, path: str) -> Point:
     ok = isinstance(value, list | tuple) and len(value) == 2 and all(map(_is_number, value))
     _require(ok, path, "must be a pair of numbers")
+    _require(all(map(math.isfinite, value)), path, "must be finite")
     return (float(value[0]), float(value[1]))
 
 
@@ -239,6 +243,8 @@ def load_config(path: str | Path) -> Config:
         raise ConfigError(f"config file not found: {path}")
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except UnicodeDecodeError as exc:
+        raise ConfigError(f"config file must be saved as UTF-8: {path}") from exc
     except yaml.YAMLError as exc:
         raise ConfigError(f"config file is not valid YAML: {path}: {exc}") from exc
     return parse_config(data)

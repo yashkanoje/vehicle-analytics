@@ -63,6 +63,16 @@ def _has_collinear_triple(points: Sequence[Point]) -> bool:
     return False
 
 
+def _is_convex_in_order(points: Sequence[Point]) -> bool:
+    """True when the four points, taken in the order given, outline a convex shape."""
+    turns = set()
+    for i in range(4):
+        a, b, c = points[i], points[(i + 1) % 4], points[(i + 2) % 4]
+        cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0])
+        turns.add(cross > 0.0)
+    return len(turns) == 1
+
+
 @dataclass(frozen=True, eq=False)
 class Homography:
     """Maps image points to ground-plane coordinates in metres."""
@@ -77,8 +87,16 @@ class Homography:
             raise ValueError(
                 "calibration needs exactly four image points and four ground points"
             )
+        if not np.isfinite(np.asarray([*image_points, *ground_points], dtype=float)).all():
+            raise ValueError("calibration points must be finite numbers")
         if _has_collinear_triple(image_points) or _has_collinear_triple(ground_points):
             raise ValueError("calibration points are degenerate (collinear or repeated)")
+        if not (_is_convex_in_order(image_points) and _is_convex_in_order(ground_points)):
+            # Two corners swapped give a bow-tie: a valid-looking but wrong mapping.
+            raise ValueError(
+                "calibration points must be given in order around the rectangle, "
+                "the same order for image and ground"
+            )
         rows: list[list[float]] = []
         rhs: list[float] = []
         for (x, y), (u, v) in zip(image_points, ground_points, strict=True):
@@ -86,7 +104,10 @@ class Homography:
             rhs.append(u)
             rows.append([0.0, 0.0, 0.0, x, y, 1.0, -v * x, -v * y])
             rhs.append(v)
-        h = np.linalg.solve(np.asarray(rows, dtype=float), np.asarray(rhs, dtype=float))
+        try:
+            h = np.linalg.solve(np.asarray(rows, dtype=float), np.asarray(rhs, dtype=float))
+        except np.linalg.LinAlgError as exc:
+            raise ValueError("calibration points do not define a ground plane") from exc
         return cls(np.append(h, 1.0).reshape(3, 3))
 
     def to_ground(self, p: Point) -> Point:

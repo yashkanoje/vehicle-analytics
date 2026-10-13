@@ -34,7 +34,7 @@ speed:
 #
 # Dimensions (standards for new construction; the road itself was not surveyed):
 #   lane line: 2 m mark + 7 m gap = 9 m module
-#     Traffic Signs Manual, Chapter 5 (2019), Figure 2-3, diagram 1005.1 (speed limit over 40 mph)
+#     Traffic Signs Manual, Chapter 5 (2018), Figure 2-3, diagram 1005.1 (speed limit over 40 mph)
 #     https://assets.publishing.service.gov.uk/media/5c4ace6ded915d38a0611abc/traffic-signs-manual-chapter-05.pdf
 #   middle lane of a dual three-lane motorway: 3.70 m (outer lanes 3.65 m)
 #     DMRB CD 127 version 1.0.1, Figure 2.1.1N1a
@@ -42,15 +42,19 @@ speed:
 #
 # Method: the centroids of 21 lane-line marks on both carriageways were measured on a
 # vehicle-free median image of the clip, and one ground plane was fitted to all of them by
-# least squares (reprojection error 1.0 px RMS, 1.6 px maximum). The four pairs below are
+# least squares (reprojection error 1.0 px RMS, 1.9 px maximum). The four pairs below are
 # the corners of a 20.13 m x 36 m rectangle on that fitted plane, spanning both carriageways.
 # A first attempt from four corners of a single 3.70 m lane was rejected: it measured the
 # far carriageway 8 % short and 15 % narrow.
 #
-# Check against markings not used in the fit: each edge line lies 3.57-3.85 m from the
+# The measurements and the fit are in tools/fit_highway_calibration.py; running it prints
+# this block and the figures quoted here, and tests/test_calibration_evidence.py checks them.
+#
+# Check against markings not used in the fit: each edge line lies 3.62-3.93 m from the
 # neighbouring lane line, against about 3.75 m expected (3.65 m lane plus half the edge
-# line), on all four sides and with no drift along the road. The 36 m zone length is
-# reproduced within 2 % on every lane line. distance_rel_uncertainty above reflects this.
+# line), on all four sides and with no drift along the road. The 36 m zone measures
+# 35.2-36.7 m along the four lane lines (within 2.2 %); those marks were used in the fit,
+# so that is consistency, not an independent check. distance_rel_uncertainty reflects both.
 calibration:
   image_points:
     - [0.1909, 0.7623]

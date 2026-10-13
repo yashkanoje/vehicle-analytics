@@ -1,11 +1,19 @@
 import csv
+import datetime
 import json
 
 import numpy as np
 import pytest
 
 from vehicle_analytics.config import parse_config
-from vehicle_analytics.pipeline import ArraySource, FpsError, VideoFileSource, VideoOpenError, run
+from vehicle_analytics.pipeline import (
+    ArraySource,
+    FpsError,
+    OutputError,
+    VideoFileSource,
+    VideoOpenError,
+    run,
+)
 from vehicle_analytics.tracking import Track
 
 SIZE = 200
@@ -216,3 +224,55 @@ def test_calibration_switches_speed_to_homography_mode(tmp_path):
 def test_unreadable_video_raises(tmp_path):
     with pytest.raises(VideoOpenError, match="cannot open video"):
         VideoFileSource(tmp_path / "missing.mp4")
+
+
+def test_constant_ground_speed_is_measured_across_tracking_gaps(tmp_path):
+    # Perspective scene: 60 m of road, its far edge a quarter of the way down the frame.
+    calibration = {
+        "image_points": [[0.0, 1.0], [1.0, 1.0], [0.75, 0.25], [0.25, 0.25]],
+        "ground_points_m": [[0.0, 0.0], [10.0, 0.0], [10.0, 60.0], [0.0, 60.0]],
+    }
+    cfg = config(calibration=calibration, tracker={"max_age": 15})
+    to_image = np.linalg.inv(cfg.homography_px(SIZE, SIZE).matrix)
+
+    def image_y(ground_y):
+        _, y, w = to_image @ np.array([5.0, ground_y, 1.0])
+        return y / w
+
+    # 1.4 m per frame towards the camera, but seen only every tenth frame.
+    script = {
+        1 + 10 * i: [Track("1", box(image_y(ground_y)), "car")]
+        for i, ground_y in enumerate([58.0, 44.0, 30.0, 16.0, 2.0])
+    }
+    result = run_script(script, 41, tmp_path, cfg=cfg)
+    assert result.records[0].speed_kmph == pytest.approx(1.4 * FPS * 3.6, rel=0.005)
+
+
+def test_summary_survives_non_json_values_in_the_config(tmp_path):
+    # YAML turns `recorded: 2025-12-08` into a date object.
+    result = run_script({}, 1, tmp_path, cfg=config(recorded=datetime.date(2025, 12, 8)))
+    summary = json.loads((result.out_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["config"]["recorded"] == "2025-12-08"
+
+
+def test_out_path_that_is_a_file_is_an_output_error(tmp_path):
+    (tmp_path / "out").write_text("not a folder", encoding="utf-8")
+    with pytest.raises(OutputError, match="output folder"):
+        run_script({}, 1, tmp_path)
+
+
+def test_video_writer_that_cannot_open_is_an_output_error(tmp_path, monkeypatch):
+    # Whether a writer opens depends on the codecs installed, so the failure is simulated.
+    class ClosedWriter:
+        def __init__(self, *args):
+            pass
+
+        def isOpened(self):  # noqa: N802 - OpenCV's name
+            return False
+
+        def release(self):
+            pass
+
+    monkeypatch.setattr("vehicle_analytics.pipeline.cv2.VideoWriter", ClosedWriter)
+    with pytest.raises(OutputError, match="annotated.mp4"):
+        run_script({}, 1, tmp_path)

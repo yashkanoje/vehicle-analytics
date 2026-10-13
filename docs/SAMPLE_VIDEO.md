@@ -5,7 +5,7 @@ The animation in the README and `configs/demo.yaml` use this clip.
 | | |
 |---|---|
 | Title | Motorway A40: on bridge above the traffic |
-| Author | Kathinka Engels |
+| Author | Kathinka Engels, for the Sounds of Changes project |
 | Source | <https://commons.wikimedia.org/wiki/File:Motorway_A40_-_on_bridge_above_the_traffic.webm> |
 | Original publication | <http://www.soundsofchanges.eu/sound/motorway-a40-on-bridge-above-the-traffic> |
 | Licence | [Creative Commons Attribution 3.0](https://creativecommons.org/licenses/by/3.0) |

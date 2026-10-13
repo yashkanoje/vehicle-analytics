@@ -9,7 +9,14 @@ from pathlib import Path
 
 from vehicle_analytics.calibrate import CalibrationError, calibration_yaml
 from vehicle_analytics.config import ConfigError, load_config
-from vehicle_analytics.pipeline import FpsError, VideoFileSource, VideoOpenError, run
+from vehicle_analytics.pipeline import (
+    FpsError,
+    OutputError,
+    VideoFileSource,
+    VideoOpenError,
+    prepare_out_dir,
+    run,
+)
 
 USER_ERROR = 2
 
@@ -44,6 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _run(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     source = VideoFileSource(args.video)
+    out_dir = prepare_out_dir(args.out or Path("runs") / args.video.stem)
 
     # Imported here so that config and video errors surface before the models load.
     from vehicle_analytics.detector import YoloDetector
@@ -53,7 +61,6 @@ def _run(args: argparse.Namespace) -> int:
     tracker = DeepSortTracker(
         config.tracker.max_age, config.tracker.n_init, config.tracker.max_cosine_distance
     )
-    out_dir = args.out or Path("runs") / args.video.stem
     result = run(
         source,
         config,
@@ -79,7 +86,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "run":
             return _run(args)
         return _calibrate(args)
-    except (ConfigError, VideoOpenError, FpsError, CalibrationError) as exc:
+    except (ConfigError, VideoOpenError, FpsError, OutputError, CalibrationError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return USER_ERROR
 

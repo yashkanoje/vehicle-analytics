@@ -71,3 +71,20 @@ def test_diagonal_line():
     assert event.point_px == pytest.approx((50.0, 50.0))
     assert event.frame_time == pytest.approx(10.5)
     assert (event.side_from, event.side_to) == (-1, 1)
+
+
+def perspective(p):
+    """Ground mapping with strong perspective: ground y = 1000 / image y."""
+    return (p[0], 1000.0 / p[1])
+
+
+def test_ground_interpolation_removes_perspective_bias_over_a_gap():
+    # 20 m -> 5 m in ten frames at constant ground speed; the line is at 10 m.
+    event = detect_crossing(LINE, "7", (50.0, 50.0), (50.0, 200.0), 0, 10, to_ground=perspective)
+    assert event.point_px == pytest.approx((50.0, 100.0))
+    assert event.frame_time == pytest.approx(20.0 / 3.0)
+
+
+def test_without_a_ground_mapping_interpolation_is_linear_in_the_image():
+    event = detect_crossing(LINE, "7", (50.0, 50.0), (50.0, 200.0), 0, 10)
+    assert event.frame_time == pytest.approx(10.0 / 3.0)

@@ -179,3 +179,26 @@ def test_load_config_reports_invalid_yaml(tmp_path):
 def test_bundled_config_is_valid():
     path = Path(__file__).parent.parent / "configs" / "highway.yaml"
     assert load_config(path).count_line == "b"
+
+
+def test_non_finite_numbers_are_rejected():
+    with pytest.raises(ConfigError, match="'tracker.max_age' must be a finite number"):
+        parse_config(with_changes(tracker={"max_age": float("inf")}))
+    ground = [[0.0, 0.0], [3.5, 0.0], [3.5, float("nan")], [0.0, 18.0]]
+    bad = {**CALIBRATION, "ground_points_m": ground}
+    with pytest.raises(ConfigError, match=r"'calibration.ground_points_m\[2\]' must be finite"):
+        parse_config(with_changes(calibration=bad))
+
+
+def test_misordered_calibration_is_rejected():
+    points = CALIBRATION["image_points"]
+    bad = {**CALIBRATION, "image_points": [points[0], points[1], points[3], points[2]]}
+    with pytest.raises(ConfigError, match="'calibration'.*in order around"):
+        parse_config(with_changes(calibration=bad))
+
+
+def test_load_config_reports_a_file_that_is_not_utf8(tmp_path):
+    path = tmp_path / "latin.yaml"
+    path.write_bytes(b"# tolerance \xb1 5 %\nlines: {}\n")
+    with pytest.raises(ConfigError, match="UTF-8"):
+        load_config(path)

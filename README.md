@@ -1,7 +1,7 @@
 # vehicle-analytics
 
 Count vehicles and measure their speed, with an error bar, from fixed-camera video.
-Runs locally and offline.
+Runs on your own machine; once the model weights have been downloaded it needs no network.
 
 ![Annotated demo](docs/demo.gif)
 
@@ -13,7 +13,8 @@ speeds use an estimated distance and are for illustration only.*
 ## What it does
 
 - Detects vehicles with YOLO and follows them with DeepSORT.
-- Counts each vehicle once, by direction and class, when it crosses a line.
+- Counts a vehicle, by direction and class, when its track crosses a line. A track is
+  counted at most once.
 - Measures speed between two lines, either from a known distance or from a ground-plane
   calibration, and reports a one-sigma uncertainty with every speed.
 - Writes an annotated video, a CSV with one row per vehicle, and a JSON summary.
@@ -26,9 +27,11 @@ frame → YOLO detections → DeepSORT tracks → bottom-centre point per vehicl
 ```
 
 **Crossing.** A vehicle crosses a line when the signed distance from its reference point to
-the line changes sign between two observations. The instant is interpolated:
-`t = d_prev / (d_prev − d_cur)`. It does not matter how far the vehicle moves per frame, or
-how many frames the tracker missed in between.
+the line changes sign between two observations, however far apart they are. The crossing
+point is where the straight path between them meets the line. The crossing instant assumes
+constant speed between the two observations: on the ground plane when the scene is
+calibrated, and in the image (`t = d_prev / (d_prev − d_cur)`) when it is not. In the image
+that assumption is biased by perspective when the tracker has missed many frames.
 
 **Reference point.** The bottom-centre of the box, where the vehicle meets the road. That is
 the plane the calibration describes.
@@ -41,10 +44,17 @@ points are projected to the ground plane and the distance is measured there.
 
 | Term | Formula | Default |
 |---|---|---|
-| Box localisation | `√2 · jitter_px / travel_px` | `jitter_px = 2` |
+| Box localisation, calibrated | `√(s_a² + s_b²) / distance` | `jitter_px = 2` |
+| Box localisation, not calibrated | `√2 · jitter_px / travel_px` | `jitter_px = 2` |
 | Real-world scale | `distance_rel_uncertainty` | `0.05` |
 
-Both inputs are stated assumptions, set in the config.
+`s_a` and `s_b` are the ground distances that a shift of `jitter_px` along the path makes at
+each crossing point. They differ because a pixel covers more road far from the camera; on
+the motorway footage below one pixel is about 0.8 m at the far line and 0.2 m at the near
+one. Without a calibration the image scale is taken as uniform between the lines.
+
+Both inputs are stated assumptions, set in the config. The error bar does not grow with the
+number of frames the tracker missed around a crossing.
 
 **Flow rate.** Vehicles per hour over the video time elapsed, `frame_index / fps`.
 
@@ -130,13 +140,15 @@ Calibration, using lane-marking dimensions from UK design standards (lane line 2
 
 | Check | Expected | Measured |
 |---|---|---|
-| Reprojection error of the 21 fitted marks | — | 1.0 px RMS, 1.6 px max |
+| Reprojection error of the 21 fitted marks | — | 1.0 px RMS, 1.9 px max |
 | Length of the 36 m zone, per lane line (4 lines, used in the fit) | 36.0 m | 35.2–36.7 m |
-| Lane line to edge line (4 sides, not used in the fit) | about 3.75 m | 3.57–3.85 m |
+| Lane line to edge line (4 sides, not used in the fit) | about 3.75 m | 3.62–3.93 m |
 
 Only the edge-line row is independent of the fit. The lengthwise scale, which is what a
 speed depends on, is supported by the consistency of the fit and not by a separate
 measurement. The road was not surveyed: the dimensions are those of the current standard.
+The measured mark positions and the fit are in `tools/fit_highway_calibration.py`, which
+prints every figure in this table.
 
 There is no ground truth for speed in this footage, so no speed accuracy is claimed. Each
 speed carries the error bar described above.
@@ -149,8 +161,8 @@ speed carries the error bar described above.
 - Speed accuracy depends on the calibration dimensions, which are taken from road standards,
   not surveyed.
 - The detector is a general COCO model; vans are sometimes labelled as trucks.
-- Not real time: about 3 frames per second on the development laptop's GPU, most of it
-  spent in the tracker's appearance embedder.
+- Not real time: the 1501-frame clip above took about eight minutes on the development
+  laptop's GPU, model loading included. The pipeline has not been profiled.
 
 ## Development
 
