@@ -1,0 +1,34 @@
+# Configuration for the public demo clip (see docs/SAMPLE_VIDEO.md): a German motorway seen
+# from a bridge, 1280x720 at 30 fps. All image coordinates are fractions of the frame.
+#
+# This scene is NOT calibrated, and its speeds are for illustration only.
+# The distance between the lines is an estimate: about four lane-marking modules lie between
+# them on the near carriageway and about three on the far one. Taking a module as 18 m
+# (6 m mark + 12 m gap, the figure commonly quoted for German motorways; not verified here,
+# because the RMS marking guideline is not freely available) gives 54-72 m. The middle
+# value is used for both carriageways with a 20 % scale uncertainty.
+# configs/highway.yaml shows a properly calibrated scene.
+
+model:
+  weights: yolo11s.pt
+  conf: 0.4
+  classes: [car, motorcycle, bus, truck]
+
+tracker:
+  max_age: 30
+  n_init: 3
+  max_cosine_distance: 0.3
+
+lines:
+  a: [[0.0, 0.70], [1.0, 0.70]]
+  b: [[0.0, 0.88], [1.0, 0.88]]
+count_line: b
+
+directions:
+  positive: towards
+  negative: away
+
+speed:
+  meters_between_lines: 63.0
+  distance_rel_uncertainty: 0.20
+  jitter_px: 2.0
