@@ -1,4 +1,5 @@
 import copy
+import datetime
 from pathlib import Path
 
 import pytest
@@ -202,3 +203,82 @@ def test_load_config_reports_a_file_that_is_not_utf8(tmp_path):
     path.write_bytes(b"# tolerance \xb1 5 %\nlines: {}\n")
     with pytest.raises(ConfigError, match="UTF-8"):
         load_config(path)
+
+
+LANE = {
+    "name": "up_1",
+    "kind": "lane",
+    "polygon": [[0.1, 0.9], [0.4, 0.9], [0.45, 0.5], [0.3, 0.5]],
+    "allowed_direction": "up",
+}
+
+
+def zone(**changes):
+    return {**LANE, **changes}
+
+
+def test_config_without_zones_or_site_has_empty_values():
+    config = parse_config(MINIMAL)
+    assert config.zones == ()
+    assert config.zones_px(640, 360) == []
+    assert (config.site_name, config.site_location, config.recording_start) == (None, None, None)
+    assert config.speed.live_speed_window_s == 0.5
+
+
+def test_zones_are_parsed_and_scaled():
+    shoulder = {"name": "hs", "kind": "shoulder", "polygon": [[0, 0], [0.1, 0], [0.1, 1]]}
+    config = parse_config(with_changes(zones=[zone(banned_classes=["truck"]), shoulder]))
+    assert [z.name for z in config.zones] == ["up_1", "hs"]
+    assert config.zones[0].banned_classes == ("truck",)
+    lane, hard_shoulder = config.zones_px(1000, 500)
+    assert lane.polygon[0] == pytest.approx((100.0, 450.0))
+    assert (lane.kind, lane.allowed_direction, lane.banned_classes) == ("lane", "up", ("truck",))
+    assert hard_shoulder.allowed_direction is None
+
+
+@pytest.mark.parametrize(
+    ("bad", "message"),
+    [
+        ("not a list", "'zones' must be a list"),
+        (["x"], r"'zones\[0\]' must be a mapping"),
+        ([zone(name="")], r"'zones\[0\].name'"),
+        ([zone(), zone()], r"'zones\[1\].name' repeats"),
+        ([zone(kind="road")], r"'zones\[0\].kind'"),
+        ([zone(polygon=[[0, 0], [1, 1]])], r"'zones\[0\].polygon' must hold at least three"),
+        ([zone(polygon=[[0, 0], [2, 1], [1, 1]])], r"'zones\[0\].polygon\[1\]' must lie between"),
+        ([zone(allowed_direction="north")], r"'zones\[0\].allowed_direction' must be"),
+        ([zone(banned_classes="truck")], r"'zones\[0\].banned_classes'"),
+        (
+            [zone(name="hs", kind="shoulder")],
+            r"'zones\[0\].allowed_direction' is only for lanes",
+        ),
+    ],
+)
+def test_invalid_zones_name_the_key(bad, message):
+    with pytest.raises(ConfigError, match=message):
+        parse_config(with_changes(zones=bad))
+
+
+def test_site_and_recording_start():
+    start = datetime.datetime(2025, 12, 8, 17, 30)
+    data = with_changes(site={"name": "M6 overbridge", "location": "UK"}, recording_start=start)
+    config = parse_config(data)
+    assert (config.site_name, config.site_location) == ("M6 overbridge", "UK")
+    assert config.recording_start == start
+    text = parse_config(with_changes(recording_start="2025-12-08T17:30:00"))
+    assert text.recording_start == start
+
+
+def test_invalid_site_and_recording_start():
+    with pytest.raises(ConfigError, match="'site.name' must be text"):
+        parse_config(with_changes(site={"name": 5}))
+    with pytest.raises(ConfigError, match="'recording_start' must be an ISO date and time"):
+        parse_config(with_changes(recording_start=datetime.date(2025, 12, 8)))
+    with pytest.raises(ConfigError, match="'recording_start' must be an ISO date and time"):
+        parse_config(with_changes(recording_start="yesterday"))
+
+
+def test_live_speed_window_must_be_positive():
+    data = with_changes(speed={"meters_between_lines": 10, "live_speed_window_s": 0})
+    with pytest.raises(ConfigError, match="'speed.live_speed_window_s'"):
+        parse_config(data)

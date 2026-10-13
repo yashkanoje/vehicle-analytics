@@ -57,6 +57,29 @@ class Line:
         return 0.0 <= u <= 1.0
 
 
+@dataclass(frozen=True)
+class Zone:
+    """A named region of the image, outlined by a polygon in pixels."""
+
+    name: str
+    kind: str
+    polygon: tuple[Point, ...]
+    allowed_direction: str | None = None
+    banned_classes: tuple[str, ...] = ()
+
+    def contains(self, p: Point) -> bool:
+        """Even-odd rule. A point exactly on the outline may fall either way."""
+        x, y = p
+        inside = False
+        count = len(self.polygon)
+        for i in range(count):
+            x1, y1 = self.polygon[i]
+            x2, y2 = self.polygon[(i + 1) % count]
+            if (y1 > y) != (y2 > y) and x < x1 + (y - y1) * (x2 - x1) / (y2 - y1):
+                inside = not inside
+        return inside
+
+
 def _has_collinear_triple(points: Sequence[Point]) -> bool:
     pts = np.asarray(points, dtype=float)
     scale = float(np.ptp(pts, axis=0).max())

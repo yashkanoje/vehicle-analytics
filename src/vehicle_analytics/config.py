@@ -8,14 +8,16 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from vehicle_analytics.geometry import Homography, Line, Point
+from vehicle_analytics.geometry import Homography, Line, Point, Zone
 
 DEFAULT_CLASSES = ["car", "motorcycle", "bus", "truck"]
+ZONE_KINDS = ("lane", "shoulder", "restricted")
 _REQUIRED = object()
 
 
@@ -42,6 +44,16 @@ class SpeedConfig:
     meters_between_lines: float | None
     distance_rel_uncertainty: float
     jitter_px: float
+    live_speed_window_s: float
+
+
+@dataclass(frozen=True)
+class ZoneConfig:
+    name: str
+    kind: str
+    polygon: tuple[Point, ...]
+    allowed_direction: str | None
+    banned_classes: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -61,6 +73,10 @@ class Config:
     speed: SpeedConfig
     calibration: CalibrationConfig | None
     fps_override: float | None
+    zones: tuple[ZoneConfig, ...]
+    site_name: str | None
+    site_location: str | None
+    recording_start: datetime | None
     raw: dict[str, Any]
 
     def lines_px(self, width: int, height: int) -> dict[str, Line]:
@@ -74,6 +90,18 @@ class Config:
             return None
         image_px = [(x * width, y * height) for x, y in self.calibration.image_points]
         return Homography.from_points(image_px, self.calibration.ground_points_m)
+
+    def zones_px(self, width: int, height: int) -> list[Zone]:
+        return [
+            Zone(
+                zone.name,
+                zone.kind,
+                tuple((x * width, y * height) for x, y in zone.polygon),
+                zone.allowed_direction,
+                zone.banned_classes,
+            )
+            for zone in self.zones
+        ]
 
     def direction_label(self, side_to: int) -> str:
         return self.direction_positive if side_to > 0 else self.direction_negative
@@ -182,10 +210,15 @@ def _parse_speed(data: dict) -> SpeedConfig:
         _require(meters > 0.0, "speed.meters_between_lines", "must be greater than 0")
     relative = _number(section, "speed.distance_rel_uncertainty", 0.05)
     jitter = _number(section, "speed.jitter_px", 2.0)
+    window = _number(section, "speed.live_speed_window_s", 0.5)
     _require(relative >= 0.0, "speed.distance_rel_uncertainty", "must not be negative")
     _require(jitter >= 0.0, "speed.jitter_px", "must not be negative")
+    _require(window > 0.0, "speed.live_speed_window_s", "must be greater than 0")
     return SpeedConfig(
-        meters_between_lines=meters, distance_rel_uncertainty=relative, jitter_px=jitter
+        meters_between_lines=meters,
+        distance_rel_uncertainty=relative,
+        jitter_px=jitter,
+        live_speed_window_s=window,
     )
 
 
@@ -208,6 +241,63 @@ def _parse_calibration(data: dict) -> CalibrationConfig | None:
     )
 
 
+def _parse_zones(data: dict, directions: tuple[str, str]) -> tuple[ZoneConfig, ...]:
+    raw = data.get("zones")
+    if raw is None:
+        return ()
+    _require(isinstance(raw, list), "zones", "must be a list")
+    zones: list[ZoneConfig] = []
+    names: set[str] = set()
+    for i, item in enumerate(raw):
+        where = f"zones[{i}]"
+        _require(isinstance(item, dict), where, "must be a mapping")
+        name = item.get("name")
+        named = isinstance(name, str) and bool(name)
+        _require(named, f"{where}.name", "must be a non-empty string")
+        _require(name not in names, f"{where}.name", f"repeats the zone name '{name}'")
+        names.add(name)
+        kind = item.get("kind")
+        _require(kind in ZONE_KINDS, f"{where}.kind", "must be 'lane', 'shoulder' or 'restricted'")
+        polygon = item.get("polygon")
+        ok = isinstance(polygon, list | tuple) and len(polygon) >= 3
+        _require(ok, f"{where}.polygon", "must hold at least three points")
+        points = tuple(
+            _fraction_point(p, f"{where}.polygon[{j}]") for j, p in enumerate(polygon)
+        )
+        allowed = item.get("allowed_direction")
+        banned = item.get("banned_classes", [])
+        ok = isinstance(banned, list) and all(isinstance(c, str) for c in banned)
+        _require(ok, f"{where}.banned_classes", "must be a list of class names")
+        if kind == "lane":
+            rule = f"must be '{directions[0]}' or '{directions[1]}' for a lane"
+            _require(allowed in directions, f"{where}.allowed_direction", rule)
+        else:
+            _require(allowed is None, f"{where}.allowed_direction", "is only for lanes")
+            _require(not banned, f"{where}.banned_classes", "is only for lanes")
+        zones.append(ZoneConfig(name, kind, points, allowed, tuple(banned)))
+    return tuple(zones)
+
+
+def _optional_text(section: dict, path: str) -> str | None:
+    value = section.get(path.rsplit(".", 1)[-1])
+    _require(value is None or isinstance(value, str), path, "must be text")
+    return value
+
+
+def _parse_recording_start(data: dict) -> datetime | None:
+    value = data.get("recording_start")
+    if value is None:
+        return None
+    rule = "must be an ISO date and time, like 2025-12-08T17:30:00"
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError as exc:
+            raise ConfigError(f"config key 'recording_start' {rule}") from exc
+    _require(isinstance(value, datetime), "recording_start", rule)
+    return value
+
+
 def parse_config(data: Any) -> Config:
     if not isinstance(data, dict):
         raise ConfigError("config file must contain a mapping at the top level")
@@ -223,6 +313,7 @@ def parse_config(data: Any) -> Config:
     fps_override = _number(data, "fps_override", None)
     if fps_override is not None:
         _require(fps_override > 0.0, "fps_override", "must be greater than 0")
+    site = _section(data, "site")
     return Config(
         model=_parse_model(data),
         tracker=_parse_tracker(data),
@@ -233,6 +324,10 @@ def parse_config(data: Any) -> Config:
         speed=speed,
         calibration=calibration,
         fps_override=fps_override,
+        zones=_parse_zones(data, (positive, negative)),
+        site_name=_optional_text(site, "site.name"),
+        site_location=_optional_text(site, "site.location"),
+        recording_start=_parse_recording_start(data),
         raw=data,
     )
 

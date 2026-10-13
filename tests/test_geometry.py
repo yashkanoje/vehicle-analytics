@@ -1,6 +1,6 @@
 import pytest
 
-from vehicle_analytics.geometry import Homography, Line, reference_point
+from vehicle_analytics.geometry import Homography, Line, Zone, reference_point
 
 HORIZONTAL = Line("a", (0.0, 100.0), (200.0, 100.0))
 
@@ -78,3 +78,22 @@ def test_homography_rejects_non_finite_points():
     bad = [(0.0, 0.0), (4.0, 0.0), (4.0, float("nan")), (0.0, 20.0)]
     with pytest.raises(ValueError, match="finite"):
         Homography.from_points(IMAGE, bad)
+
+
+SQUARE = Zone("s", "lane", ((0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)))
+L_SHAPE = Zone(
+    "l", "restricted", ((0.0, 0.0), (10.0, 0.0), (10.0, 4.0), (4.0, 4.0), (4.0, 10.0), (0.0, 10.0))
+)
+
+
+def test_zone_contains_points_inside_only():
+    assert SQUARE.contains((5.0, 5.0))
+    assert not SQUARE.contains((11.0, 5.0))
+    assert not SQUARE.contains((5.0, -1.0))
+    assert not SQUARE.contains((-0.1, 5.0))
+
+
+def test_zone_handles_a_concave_outline():
+    assert L_SHAPE.contains((2.0, 8.0))
+    assert L_SHAPE.contains((8.0, 2.0))
+    assert not L_SHAPE.contains((8.0, 8.0))
