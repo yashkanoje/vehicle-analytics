@@ -254,6 +254,11 @@ How the rules behave at their edges:
 - `stopped` is judged on distance moved over the whole period, not on a momentary speed:
   far from the camera one pixel of box jitter is most of a metre. A vehicle cut by the
   frame edge, or seen in fewer than half the frames of the period, is not judged.
+- `stopped` does not know why a vehicle is standing. In a traffic jam it would flag every
+  vehicle in the queue, although queuing is lawful. It has never been run on stationary
+  traffic: the queue in the validation clip kept moving. Until the rule compares a vehicle
+  with the rest of its lane, use it only where standing traffic is not expected, and treat
+  every draft it produces as a prompt to look, not a finding.
 - Dwell time in a zone counts from the first sighting inside it to the latest one, frames
   in which the tracker lost the vehicle included.
 - A violation belongs to a track. If the tracker gives a vehicle a new ID, a standing
@@ -364,6 +369,7 @@ speed carries the error bar described above.
   on the legal class of a vehicle cannot be applied reliably.
 - Four of the five rules have never fired on real footage, and the fifth only under a
   lowered limit.
+- `stopped` cannot tell a vehicle stopped on its own from one standing in a traffic jam.
 - The sample challan uses an uncalibrated clip and a limit chosen for illustration.
 - Challan PDFs use a built-in Latin font: other scripts, and the rupee sign, do not print.
 - A database made by an earlier version of this software is refused; use a new file.
