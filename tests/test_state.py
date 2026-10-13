@@ -194,3 +194,12 @@ def test_partly_visible_observations_are_left_out_of_the_ground_history():
     state.observe(4, (100.0, 40.0), "car", [], metres)
     assert state.live_speed_kmph(10.0, 0.5) == pytest.approx(36.0)
     assert len(state.history) == 4
+
+
+def test_uncounted_vehicle_gives_a_record_only_when_asked():
+    state = TrackState("1")
+    state.observe(4, (100.0, 60.0), "car", LINES)
+    assert state.to_record(fps=10.0) is None
+    record = state.to_record(fps=10.0, include_uncounted=True)
+    assert (record.direction, record.counted_at_s) == (None, None)
+    assert (record.cls_name, record.first_seen_s) == ("car", 0.4)

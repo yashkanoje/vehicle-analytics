@@ -22,8 +22,8 @@ class VehicleRecord:
 
     track_id: str
     cls_name: str
-    direction: str
-    counted_at_s: float
+    direction: str | None
+    counted_at_s: float | None
     speed_kmph: float | None
     speed_err_kmph: float | None
     speed_mode: str | None
@@ -145,9 +145,13 @@ class TrackState:
         self.lane = lane
 
     def to_record(
-        self, fps: float | None = None, snapshot_path: str | None = None
+        self,
+        fps: float | None = None,
+        snapshot_path: str | None = None,
+        include_uncounted: bool = False,
     ) -> VehicleRecord | None:
-        if self.direction is None or self.counted_at_s is None:
+        """The vehicle's record, or None if it was not counted and `include_uncounted` is off."""
+        if not self.counted and not include_uncounted:
             return None
         speed = self.speed
         return VehicleRecord(

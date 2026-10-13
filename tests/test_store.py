@@ -4,6 +4,7 @@ import sqlite3
 
 import pytest
 
+from vehicle_analytics.rules import Violation
 from vehicle_analytics.state import VehicleRecord
 from vehicle_analytics.store import Store, StoreError
 
@@ -132,12 +133,12 @@ def test_file_that_is_not_a_database_is_a_store_error(tmp_path):
         Store(path)
 
 
-def test_only_the_phase_b_tables_exist(tmp_path):
+def test_tables(tmp_path):
     path = tmp_path / "analytics.db"
     with Store(path):
         pass
     names = sqlite3.connect(path).execute("SELECT name FROM sqlite_master WHERE type = 'table'")
-    assert {name for (name,) in names} == {"runs", "vehicles"}
+    assert {name for (name,) in names} == {"runs", "vehicles", "violations", "challans"}
 
 
 def test_write_failures_are_store_errors(tmp_path):
@@ -150,3 +151,103 @@ def test_write_failures_are_store_errors(tmp_path):
         store.add_vehicle(run_id, record())
     with pytest.raises(StoreError, match="cannot write to database"):
         store.finish_run(run_id, 5)
+
+
+SPEEDING = Violation("overspeed", 12.5, 120.0, 100.0, 10.0, "km/h")
+ON_SHOULDER = Violation("restricted_zone", 30.0, 2.0, 2.0, unit="s", zone="hs")
+
+
+def seeded(store):
+    """A run with one speeding car and one uncounted vehicle on the shoulder."""
+    run_id = store.start_run("clip.mp4", 25.0, {}, site_name="M6")
+    car = store.add_vehicle(run_id, record("7"))
+    lorry = store.add_vehicle(
+        run_id, record("9", cls_name="truck", direction=None, counted_at_s=None, lane=None)
+    )
+    first = store.add_violation(car, SPEEDING, "ev/7_frame.jpg", "ev/7_crop.jpg")
+    second = store.add_violation(lorry, ON_SHOULDER, None, None)
+    return run_id, first, second
+
+
+def test_uncounted_vehicle_can_be_stored(store):
+    run_id, _, _ = seeded(store)
+    rows = {row["track_id"]: row for row in store.vehicles(run_id)}
+    assert rows["9"]["direction"] is None and rows["9"]["counted_at_s"] is None
+
+
+def test_violation_round_trip(store):
+    run_id, first, second = seeded(store)
+    rows = store.violations(run_id)
+    assert [row["id"] for row in rows] == [first, second]
+    speeding = rows[0]
+    assert (speeding["rule"], speeding["track_id"], speeding["class"]) == ("overspeed", "7", "car")
+    assert (speeding["measured"], speeding["limit_value"]) == (120.0, 100.0)
+    assert (speeding["margin"], speeding["unit"], speeding["at_s"]) == (10.0, "km/h", 12.5)
+    assert (speeding["evidence_path"], speeding["crop_path"]) == ("ev/7_frame.jpg", "ev/7_crop.jpg")
+    shoulder = rows[1]
+    assert (shoulder["zone"], shoulder["margin"], shoulder["evidence_path"]) == ("hs", None, None)
+
+
+def test_violation_needs_an_existing_vehicle(store):
+    with pytest.raises(StoreError, match="vehicle 99"):
+        store.add_violation(99, SPEEDING, None, None)
+
+
+def test_has_run(store):
+    run_id, _, _ = seeded(store)
+    assert store.has_run(run_id) and not store.has_run(run_id + 1)
+
+
+def test_challan_details_before_and_after_a_challan(store):
+    run_id, first, second = seeded(store)
+    before = store.challan_details(run_id)
+    assert [row["violation_id"] for row in before] == [first, second]
+    assert before[0]["challan_no"] is None and before[0]["site_name"] == "M6"
+    assert (before[0]["track_id"], before[0]["class"], before[0]["colour"]) == ("7", "car", "red")
+    assert (before[1]["direction"], before[1]["video"]) == (None, "clip.mp4")
+
+    store.save_challan(
+        first, "VA-1-0001", "2026-10-13T12:00:00", "s. 183", "Speeding", "Rs. 1,000", "c/1.pdf"
+    )
+    after = store.challan_details(run_id)
+    assert (after[0]["challan_no"], after[0]["status"]) == ("VA-1-0001", "pending_review")
+    assert after[0]["created_at"] == "2026-10-13T12:00:00"
+    assert after[1]["challan_no"] is None
+
+
+def test_saving_a_challan_again_updates_the_fine_and_keeps_its_identity(store):
+    run_id, first, _ = seeded(store)
+    store.save_challan(first, "VA-1-0001", "2026-10-13T12:00:00", None, None, None, "c/a.pdf")
+    store.save_challan(
+        first, "VA-1-0099", "2030-01-01T00:00:00", "s. 183", "Speeding", "Rs. 1,000", "c/b.pdf"
+    )
+    (row,) = [r for r in store.challan_details(run_id) if r["violation_id"] == first]
+    assert (row["challan_no"], row["created_at"]) == ("VA-1-0001", "2026-10-13T12:00:00")
+    count = store._db.execute("SELECT COUNT(*) FROM challans").fetchone()[0]
+    fine = store._db.execute("SELECT section, penalty, pdf_path FROM challans").fetchone()
+    assert count == 1 and tuple(fine) == ("s. 183", "Rs. 1,000", "c/b.pdf")
+
+
+def test_challan_numbers_are_unique(store):
+    _, first, second = seeded(store)
+    store.save_challan(first, "VA-1-0001", "2026-10-13T12:00:00", None, None, None, "a.pdf")
+    with pytest.raises(StoreError, match="VA-1-0001"):
+        store.save_challan(second, "VA-1-0001", "2026-10-13T12:00:00", None, None, None, "b.pdf")
+
+
+def test_database_from_an_older_version_is_refused(tmp_path):
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.execute("CREATE TABLE runs (id INTEGER PRIMARY KEY, video TEXT)")
+    old.commit()
+    old.close()
+    with pytest.raises(StoreError, match="older version"):
+        Store(path)
+
+
+def test_a_current_database_reopens(tmp_path):
+    path = tmp_path / "analytics.db"
+    with Store(path) as first:
+        run_id, _, _ = seeded(first)
+    with Store(path) as second:
+        assert len(second.violations(run_id)) == 2
