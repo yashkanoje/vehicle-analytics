@@ -27,6 +27,9 @@ vehicle-analytics = "vehicle_analytics.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+vehicle_analytics = ["*.sql"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
