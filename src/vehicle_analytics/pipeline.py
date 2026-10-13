@@ -227,9 +227,8 @@ def run(
     road = RoadReference(zones, source.width, source.height)
     homography = config.homography_px(source.width, source.height)
     to_ground = homography.to_ground if homography is not None else None
-    rules, rules_disabled = build_rules(
-        config.rules, zones, fps, homography is not None, config.speed.live_speed_window_s
-    )
+    rules, rules_disabled = build_rules(config.rules, zones, fps, homography is not None)
+    rules_by_name = {rule.name: rule for rule in rules}
     for name, reason in rules_disabled.items():
         logger.warning("rule '%s' is disabled: %s", name, reason)
     video_path = out_dir / "annotated.mp4"
@@ -279,7 +278,17 @@ def run(
 
     def finalise(track_id: str) -> None:
         state = states.pop(track_id)
-        found = caught.pop(track_id, [])
+        found = []
+        for violation, frame_path, crop_path in caught.pop(track_id, []):
+            # A class-dependent rule fired on the class seen at the time. Keep the
+            # violation only if it holds for the class the record will carry.
+            confirmed = rules_by_name[violation.rule].confirm(state, violation)
+            if confirmed is None:
+                for path in (frame_path, crop_path):
+                    if path:
+                        Path(path).unlink(missing_ok=True)
+            else:
+                found.append((confirmed, frame_path, crop_path))
         for rule in rules:
             rule.forget(track_id)
         if not state.counted and not found:
@@ -339,7 +348,13 @@ def run(
                     violation = rule.update(state, frame_index / fps)
                     if violation is not None:
                         stem = f"{track.track_id}_{violation.rule}"
-                        paths = save_evidence(frame, track.box_xyxy, run_folder("evidence"), stem)
+                        try:
+                            folder = run_folder("evidence")
+                            paths = save_evidence(frame, track.box_xyxy, folder, stem)
+                        except (OSError, OutputError) as exc:
+                            # The violation is kept; only its pictures are missing.
+                            logger.warning("evidence for track %s was not saved: %s", stem, exc)
+                            paths = (None, None)
                         caught.setdefault(track.track_id, []).append((violation, *paths))
 
             # Second pass: draw.

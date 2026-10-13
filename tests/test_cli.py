@@ -163,3 +163,37 @@ def test_the_module_runs_as_a_program():
     )
     assert done.returncode == 0
     assert "usage: vehicle-analytics" in done.stdout
+
+
+def stored_run(db):
+    from vehicle_analytics.rules import Violation
+    from vehicle_analytics.state import VehicleRecord
+    from vehicle_analytics.store import Store
+
+    with Store(db) as store:
+        run_id = store.start_run("clip.mp4", 25.0, {})
+        car = VehicleRecord("7", "car", "down", 1.5, 121.4, 9.0, "two_line")
+        speeding = Violation("overspeed", 12.5, 121.4, 100.0, 18.0, "km/h")
+        store.add_violation(store.add_vehicle(run_id, car), speeding, None, None)
+    return run_id
+
+
+def test_challans_redraft_goes_to_the_folder_of_the_first_draft(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    run_id = stored_run(tmp_path / "a.db")
+    assert main(["challans", "--run", str(run_id), "--db", "a.db", "--out", "custom"]) == 0
+    pdf = tmp_path / "custom" / "challans" / str(run_id) / f"VA-{run_id}-0001.pdf"
+    pdf.write_bytes(b"stale")
+    assert main(["challans", "--run", str(run_id), "--db", "a.db"]) == 0
+    assert pdf.read_bytes().startswith(b"%PDF")
+    assert not (tmp_path / "runs").exists()
+
+
+def test_challans_that_cannot_be_written_return_2(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    run_id = stored_run(tmp_path / "a.db")
+    (tmp_path / "blocked").mkdir()
+    (tmp_path / "blocked" / "challans").write_text("in the way", encoding="utf-8")
+    code = main(["challans", "--run", str(run_id), "--db", "a.db", "--out", "blocked"])
+    assert code == 2
+    assert "cannot write challan" in capsys.readouterr().err

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING
 
-from vehicle_analytics.config import RulesConfig
 from vehicle_analytics.geometry import Zone
 from vehicle_analytics.state import TrackState
+
+if TYPE_CHECKING:  # the config loader needs PyYAML; the rules do not
+    from vehicle_analytics.config import RulesConfig
 
 
 @dataclass(frozen=True)
@@ -43,6 +47,14 @@ class Rule:
         """Drop what is remembered about a vehicle that has left."""
         self._fired.discard(track_id)
 
+    def confirm(self, state: TrackState, violation: Violation) -> Violation | None:
+        """The violation as it stands once the vehicle has left, or None if it no longer does.
+
+        A rule that depends on the vehicle's class fires on the class seen so far. The
+        class kept in the record is the majority over the whole track, which can differ.
+        """
+        return violation
+
     def _check(self, state: TrackState, t: float) -> Violation | None:
         raise NotImplementedError
 
@@ -69,6 +81,12 @@ class Overspeed(Rule):
         if state.speed.kmph - margin <= limit:
             return None
         return Violation(self.name, t, state.speed.kmph, limit, margin, "km/h")
+
+    def confirm(self, state: TrackState, violation: Violation) -> Violation | None:
+        limit = self.limits_kmph.get(state.cls_name, self.limits_kmph["default"])
+        if violation.measured - violation.margin <= limit:
+            return None
+        return replace(violation, limit_value=limit)
 
 
 class WrongWay(Rule):
@@ -135,43 +153,55 @@ class ClassLane(_Dwell):
     def _zones_for(self, state: TrackState) -> Sequence[str]:
         return [name for name, banned in self._banned.items() if state.cls_name in banned]
 
+    def confirm(self, state: TrackState, violation: Violation) -> Violation | None:
+        banned = self._banned.get(violation.zone, ())
+        return violation if state.cls_name in banned else None
+
 
 class Stopped(Rule):
-    """Stood still in a lane. Uses the live ground speed, so it needs a calibration."""
+    """Stayed within a small radius in a lane for `min_stop_s`. Needs a calibration.
+
+    Judged on how far the vehicle moved over the whole period, not on an instantaneous
+    speed: far from the camera one pixel of box jitter is most of a metre, which over half
+    a second reads as several km/h. The radius is the distance a vehicle at
+    `stop_speed_kmph` would cover in `min_stop_s`.
+    """
 
     name = "stopped"
 
     def __init__(
-        self,
-        zones: Sequence[Zone],
-        stop_speed_kmph: float,
-        min_stop_s: float,
-        fps: float,
-        window_s: float,
+        self, zones: Sequence[Zone], stop_speed_kmph: float, min_stop_s: float, fps: float
     ) -> None:
         super().__init__()
         self._lanes = [z.name for z in zones if z.kind == "lane"]
         self.stop_speed_kmph = stop_speed_kmph
         self.min_stop_s = min_stop_s
         self.fps = fps
-        self.window_s = window_s
-        self._since: dict[str, float] = {}
-
-    def forget(self, track_id: str) -> None:
-        super().forget(track_id)
-        self._since.pop(track_id, None)
 
     def _check(self, state: TrackState, t: float) -> Violation | None:
         lane = next((name for name in self._lanes if name in state.zone_entered), None)
-        live = state.live_speed_kmph(self.fps, self.window_s)
-        if lane is None or live is None or live >= self.stop_speed_kmph:
-            # Unknown counts as moving: a vehicle is not accused on missing data.
-            self._since.pop(state.track_id, None)
+        history = state.ground_history
+        if lane is None or not history or history[-1][0] != state.last_frame:
+            # Not in a lane, or not fully visible now. Unknown counts as moving: a vehicle
+            # is not accused on missing data.
             return None
-        since = self._since.setdefault(state.track_id, t)
-        if round(t - since, 6) < self.min_stop_s:
-            return None
-        return Violation(self.name, t, live, self.stop_speed_kmph, unit="km/h", zone=lane)
+        now_frame, here = history[-1]
+        period_frames = self.min_stop_s * self.fps
+        radius_m = self.stop_speed_kmph / 3.6 * self.min_stop_s
+        sightings = 0
+        for frame, ground in reversed(history):
+            if math.dist(ground, here) > radius_m:
+                return None
+            sightings += 1
+            if now_frame - frame >= period_frames:
+                break
+        else:
+            return None  # not watched for long enough yet
+        if sightings < period_frames / 2:
+            return None  # seen too rarely in the period to say it stood still
+        elapsed_s = (now_frame - frame) / self.fps
+        measured = math.dist(ground, here) / elapsed_s * 3.6 if elapsed_s > 0 else 0.0
+        return Violation(self.name, t, measured, self.stop_speed_kmph, unit="km/h", zone=lane)
 
 
 def build_rules(
@@ -179,7 +209,6 @@ def build_rules(
     zones: Sequence[Zone],
     fps: float,
     calibrated: bool,
-    live_window_s: float,
 ) -> tuple[list[Rule], dict[str, str]]:
     """The rules this scene can run, and why each of the others cannot."""
     lanes = [z for z in zones if z.kind == "lane"]
@@ -202,9 +231,7 @@ def build_rules(
     if config.stopped is not None:
         if calibrated and lanes:
             stopped = config.stopped
-            rules.append(
-                Stopped(zones, stopped.stop_speed_kmph, stopped.min_stop_s, fps, live_window_s)
-            )
+            rules.append(Stopped(zones, stopped.stop_speed_kmph, stopped.min_stop_s, fps))
         else:
             disabled["stopped"] = "it needs a calibration and lane zones"
     if config.class_lane_dwell_s is not None:

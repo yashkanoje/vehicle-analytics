@@ -352,3 +352,21 @@ def test_a_rule_named_with_no_settings_uses_defaults():
 def test_invalid_rules_name_the_key(bad, message):
     with pytest.raises(ConfigError, match=message):
         parse_config(with_changes(rules=bad))
+
+
+def test_demonstration_config_differs_from_the_real_one_only_in_the_limit():
+    configs = Path(__file__).parent.parent / "configs"
+    real = load_config(configs / "highway.yaml")
+    demo = load_config(configs / "highway_demo_limit.yaml")
+    assert real.rules.overspeed.limits_kmph != demo.rules.overspeed.limits_kmph
+    real_raw, demo_raw = copy.deepcopy(real.raw), copy.deepcopy(demo.raw)
+    del real_raw["rules"]["overspeed"]["limits_kmph"], demo_raw["rules"]["overspeed"]["limits_kmph"]
+    assert real_raw == demo_raw
+
+
+def test_shipped_configs_and_fines_load():
+    from vehicle_analytics.challan import load_fines
+
+    configs = Path(__file__).parent.parent / "configs"
+    assert load_config(configs / "demo.yaml").rules.overspeed is not None
+    assert set(load_fines(configs / "fines_india.yaml")) == {"overspeed", "wrong_way", "stopped"}

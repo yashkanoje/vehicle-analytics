@@ -203,3 +203,13 @@ def test_uncounted_vehicle_gives_a_record_only_when_asked():
     record = state.to_record(fps=10.0, include_uncounted=True)
     assert (record.direction, record.counted_at_s) == (None, None)
     assert (record.cls_name, record.first_seen_s) == ("car", 0.4)
+
+
+def test_live_speed_is_unknown_while_the_vehicle_is_not_fully_visible():
+    # The last ground point is then out of date; it must not stand in for the present.
+    state = TrackState("1")
+    state.observe(1, (100.0, 30.0), "car", [], metres)
+    state.observe(2, (100.0, 30.0), "car", [], metres)
+    assert state.live_speed_kmph(10.0, 0.5) == pytest.approx(0.0)
+    state.observe(3, (100.0, 60.0), "car", [], metres, visible=False)
+    assert state.live_speed_kmph(10.0, 0.5) is None

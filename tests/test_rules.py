@@ -109,7 +109,7 @@ def metres(p):
 
 
 def stopped_rule():
-    return Stopped([UP_LANE], stop_speed_kmph=5.0, min_stop_s=3.0, fps=FPS, window_s=0.5)
+    return Stopped([UP_LANE], stop_speed_kmph=5.0, min_stop_s=3.0, fps=FPS)
 
 
 def test_stopped_fires_after_standing_still_in_a_lane():
@@ -120,10 +120,10 @@ def test_stopped_fires_after_standing_still_in_a_lane():
         violation = rule.update(state, frame / FPS)
         if violation is not None:
             fired[frame] = violation
-    # Standing is first measurable at frame 2 (two ground points), so 3 s later is frame 32.
-    assert list(fired) == [32]
-    assert fired[32] == Violation(
-        rule="stopped", at_s=3.2, measured=0.0, limit_value=5.0, unit="km/h", zone="up_1"
+    # Seen from frame 1, so three seconds of standing are complete at frame 31.
+    assert list(fired) == [31]
+    assert fired[31] == Violation(
+        rule="stopped", at_s=3.1, measured=0.0, limit_value=5.0, unit="km/h", zone="up_1"
     )
 
 
@@ -159,18 +159,18 @@ FULL = RulesConfig(
 
 
 def test_no_rules_configured_means_no_rules():
-    assert build_rules(RulesConfig(), [UP_LANE], FPS, True, 0.5) == ([], {})
+    assert build_rules(RulesConfig(), [UP_LANE], FPS, True) == ([], {})
 
 
 def test_all_rules_run_in_a_scene_that_supports_them():
-    rules, disabled = build_rules(FULL, [UP_LANE, FAST_LANE, SHOULDER], FPS, True, 0.5)
+    rules, disabled = build_rules(FULL, [UP_LANE, FAST_LANE, SHOULDER], FPS, True)
     names = [rule.name for rule in rules]
     assert names == ["overspeed", "wrong_way", "restricted_zone", "stopped", "class_lane"]
     assert disabled == {}
 
 
 def test_rules_without_their_requirements_are_disabled():
-    rules, disabled = build_rules(FULL, [], FPS, False, 0.5)
+    rules, disabled = build_rules(FULL, [], FPS, False)
     assert [rule.name for rule in rules] == ["overspeed"]
     assert set(disabled) == {"wrong_way", "restricted_zone", "stopped", "class_lane"}
     assert "lane" in disabled["wrong_way"]
@@ -178,6 +178,83 @@ def test_rules_without_their_requirements_are_disabled():
 
 
 def test_class_lane_needs_a_lane_with_banned_classes():
-    _, disabled = build_rules(FULL, [UP_LANE, SHOULDER], FPS, True, 0.5)
+    _, disabled = build_rules(FULL, [UP_LANE, SHOULDER], FPS, True)
     assert set(disabled) == {"class_lane"}
     assert "banned_classes" in disabled["class_lane"]
+
+
+def far_away(p):
+    """0.8 m per pixel, as at the far line of the motorway scene."""
+    return (p[0] * 0.8, p[1] * 0.8)
+
+
+def test_stopped_is_not_defeated_by_box_jitter_far_from_the_camera():
+    # One pixel of jitter is 0.8 m here: over half a second that reads as 6 km/h.
+    rule, state = stopped_rule(), TrackState("7")
+    fired = []
+    for frame in range(1, 61):
+        y = 50.0 + (frame % 2)
+        state.observe(frame, (50.0, y), "car", [], far_away, [UP_LANE])
+        if rule.update(state, frame / FPS) is not None:
+            fired.append(frame)
+    assert fired == [31]
+
+
+def test_stopped_does_not_judge_a_vehicle_that_is_no_longer_fully_visible():
+    rule, state = stopped_rule(), TrackState("7")
+    for frame in range(1, 7):
+        state.observe(frame, (50.0, 50.0), "car", [], metres, [UP_LANE])
+        assert rule.update(state, frame / FPS) is None
+    for frame in range(7, 61):  # cut by the frame edge, and in fact moving
+        state.observe(frame, (50.0, 50.0), "car", [], metres, [UP_LANE], visible=False)
+        assert rule.update(state, frame / FPS) is None
+
+
+def test_stopped_needs_enough_sightings_in_the_period():
+    rule, state = stopped_rule(), TrackState("7")
+    state.observe(1, (50.0, 50.0), "car", [], metres, [UP_LANE])
+    state.observe(40, (50.0, 50.0), "car", [], metres, [UP_LANE])  # unseen for 3.9 s
+    assert rule.update(state, 4.0) is None
+
+
+def test_overspeed_is_dropped_when_the_final_class_has_a_higher_limit():
+    rule = Overspeed({"default": 1000.0, "truck": 10.0}, sigma_margin=2.0)
+    state = track("truck", speed=speed(100.0, 1.0))
+    violation = rule.update(state, 1.0)
+    assert violation.limit_value == 10.0
+    assert rule.confirm(state, violation) == violation
+    state.class_votes["car"] += 5  # the detector settles on "car"
+    assert rule.confirm(state, violation) is None
+
+
+def test_overspeed_keeps_the_violation_with_the_final_class_limit():
+    rule = Overspeed({"default": 50.0, "truck": 10.0}, sigma_margin=2.0)
+    state = track("truck", speed=speed(100.0, 1.0))
+    violation = rule.update(state, 1.0)
+    state.class_votes["car"] += 5
+    assert rule.confirm(state, violation).limit_value == 50.0
+
+
+def test_class_lane_is_dropped_when_the_final_class_is_allowed():
+    rule = ClassLane([FAST_LANE], min_dwell_s=2.0, fps=FPS)
+    state = track("truck", zones={"down_3": 0})
+    violation = rule.update(state, 5.0)
+    assert rule.confirm(state, violation) == violation
+    state.class_votes["car"] += 5
+    assert rule.confirm(state, violation) is None
+
+
+def test_other_rules_are_confirmed_as_they_stand():
+    rule = WrongWay([UP_LANE])
+    state = track(direction="down", lane="up_1")
+    violation = rule.update(state, 3.0)
+    assert rule.confirm(state, violation) == violation
+
+
+def test_rules_module_does_not_need_the_config_loader():
+    import subprocess
+    import sys
+
+    code = "import sys, vehicle_analytics.rules; print('yaml' in sys.modules)"
+    done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
+    assert done.stdout.strip() == "False"

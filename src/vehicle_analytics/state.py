@@ -117,6 +117,8 @@ class TrackState:
         if len(self.ground_history) < 2:
             return None
         k_now, ground_now = self.ground_history[-1]
+        if k_now != self.last_frame:
+            return None  # not fully visible now: the last ground point is out of date
         k_then, ground_then = k_now, ground_now
         for k, ground in reversed(self.ground_history[:-1]):
             if k_now - k > window_s * fps:

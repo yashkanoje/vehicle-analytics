@@ -1,8 +1,12 @@
+import logging
+
 import cv2
 import numpy as np
 import pytest
+from pypdf import PdfReader
 
 from vehicle_analytics.challan import (
+    ChallanError,
     Fine,
     challan_fields,
     generate_for_run,
@@ -33,6 +37,7 @@ ROW = {
     "site_name": "M6 overbridge",
     "site_location": "Staffordshire",
     "recording_start": "2025-12-08T17:30:00",
+    "speed_mode": "homography",
 }
 PENALTY = {"default": "Rs. 1,000", "truck": "Rs. 2,000"}
 FINE = Fine("s. 183(1)", "Driving at excessive speed", PENALTY, "x")
@@ -99,8 +104,15 @@ def test_fields_without_a_recording_time_or_numbers():
 
 
 def test_dwell_rules_show_time_without_a_tolerance():
-    row = {**ROW, "rule": "restricted_zone", "zone": "hs", "measured": 2.4, "limit_value": 2.0,
-           "margin": None, "unit": "s"}
+    row = {
+        **ROW,
+        "rule": "restricted_zone",
+        "zone": "hs",
+        "measured": 2.4,
+        "limit_value": 2.0,
+        "margin": None,
+        "unit": "s",
+    }
     fields = as_dict(challan_fields(row, None, "VA-1-0003", "2026-10-13T12:00:00"))
     assert (fields["Measured"], fields["Limit"]) == ("2.4 s", "2.0 s")
     assert "Tolerance applied" not in fields
@@ -223,3 +235,54 @@ def test_a_run_without_violations_makes_nothing(store, tmp_path):
     run_id = store.start_run("clip.mp4", 25.0, {})
     assert generate_for_run(store, run_id, {}, tmp_path / "out") == []
     assert not (tmp_path / "out" / "challans").exists()
+
+
+def test_overspeed_challan_says_how_the_speed_was_measured():
+    calibrated = as_dict(challan_fields(ROW, None, "VA-1-0001", "2026-10-13T12:00:00"))
+    assert calibrated["Speed measured by"] == "Ground-plane calibration"
+    row = {**ROW, "speed_mode": "two_line"}
+    assumed = as_dict(challan_fields(row, None, "VA-1-0001", "2026-10-13T12:00:00"))
+    assert assumed["Speed measured by"] == "Assumed distance between two lines (not calibrated)"
+    other = {**ROW, "rule": "wrong_way", "measured": None, "limit_value": None, "margin": None}
+    assert "Speed measured by" not in as_dict(
+        challan_fields(other, None, "VA-1-0002", "2026-10-13")
+    )
+
+
+def pdf_text(path):
+    return " ".join(page.extract_text() for page in PdfReader(str(path)).pages)
+
+
+def test_markup_characters_in_values_are_printed_not_interpreted(tmp_path):
+    row = {**ROW, "site_name": "M&S <north> car park", "lane": "Lane <b", "video": "R&D <test>.mp4"}
+    path = tmp_path / "c.pdf"
+    render_pdf(path, challan_fields(row, None, "VA-1-0001", "2026-10-13T12:00:00"), None, None)
+    text = pdf_text(path)
+    assert "M&S <north> car park" in text
+    assert "Lane <b" in text
+    assert "R&D <test>.mp4" in text
+
+
+def test_missing_evidence_images_are_reported(store, tmp_path, caplog):
+    run_id = seeded(store, tmp_path)
+    (tmp_path / "f.jpg").unlink()
+    with caplog.at_level(logging.WARNING, logger="vehicle_analytics.challan"):
+        generate_for_run(store, run_id, {}, tmp_path / "out")
+    assert "evidence image not found" in caplog.text and "f.jpg" in caplog.text
+
+
+def test_a_folder_that_cannot_be_made_is_a_challan_error(store, tmp_path):
+    run_id = seeded(store, tmp_path)
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out" / "challans").write_text("a file is in the way", encoding="utf-8")
+    with pytest.raises(ChallanError, match="cannot write challan"):
+        generate_for_run(store, run_id, {}, tmp_path / "out")
+
+
+def test_a_challan_number_of_another_shape_is_ignored_when_numbering(store, tmp_path):
+    run_id = seeded(store, tmp_path)
+    first = store.challan_details(run_id)[0]["violation_id"]
+    store.save_challan(first, "LEGACY", "2026-10-13T12:00:00", None, None, None, "x.pdf")
+    generate_for_run(store, run_id, {}, tmp_path / "out")
+    numbers = sorted(row["challan_no"] for row in store.challan_details(run_id))
+    assert numbers == ["LEGACY", f"VA-{run_id}-0001"]

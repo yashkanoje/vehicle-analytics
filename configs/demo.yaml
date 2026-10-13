@@ -19,6 +19,9 @@ tracker:
   n_init: 3
   max_cosine_distance: 0.3
 
+site:
+  name: "ILLUSTRATION ONLY - uncalibrated demo clip; the speed and the limit are not real measurements"
+
 lines:
   a: [[0.0, 0.70], [1.0, 0.70]]
   b: [[0.0, 0.88], [1.0, 0.88]]
@@ -33,9 +36,10 @@ speed:
   distance_rel_uncertainty: 0.20
   jitter_px: 2.0
 
-# ILLUSTRATION ONLY. The limit below is not this road's limit. It is set low so that the
-# sample challan in docs/ can be produced from this freely licensed clip. With speeds that
-# rest on an estimated distance, no vehicle here can be said to have been speeding.
+# ILLUSTRATION ONLY. This road's speed limit was not established. The value below was
+# chosen so that the sample challan in docs/ can be produced from this freely licensed
+# clip. With speeds that rest on an estimated distance, nothing can be said about whether
+# any vehicle here was speeding. The site name is printed on every challan.
 rules:
   overspeed:
     limits_kmph:

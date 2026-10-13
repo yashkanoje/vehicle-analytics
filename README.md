@@ -88,14 +88,15 @@ Outputs go to `runs/<video name>/`:
 |---|---|
 | `annotated.mp4` | Boxes, IDs, class, speed ± error, both lines, live counts |
 | `events.csv` | One row per counted vehicle, with the same fields as the `vehicles` table below |
-| `snapshots/` | The largest fully visible crop of each counted vehicle, in a folder per database run |
+| `snapshots/` | The largest fully visible crop of each recorded vehicle, in a folder per database run |
 | `violations.csv` | One row per violation: rule, measured value, limit, margin, evidence files |
 | `evidence/`, `challans/` | Evidence images and draft challan PDFs, in a folder per database run |
 | `summary.json` | Counts, flow, speed mean / median / max by direction, config used |
 
 ## Records
 
-Each run adds a row to `runs` and one row per counted vehicle to `vehicles` in a SQLite
+Each run adds a row to `runs` and one row per counted vehicle (and per uncounted vehicle
+that broke a rule) to `vehicles` in a SQLite
 file (`--db`, default `data/analytics.db`).
 
 | Column | Meaning |
@@ -173,7 +174,7 @@ fires at most once per vehicle. No learned model is involved after tracking.
 | `overspeed` | speed − 2 × its error bar is above the limit for the vehicle's class | a measured zone speed |
 | `wrong_way` | the vehicle is counted in a lane whose permitted direction is the other one | lane zones |
 | `restricted_zone` | it stays on a hard shoulder or in a restricted zone longer than `min_dwell_s` | such zones |
-| `stopped` | its live speed stays below `stop_speed_kmph` in a lane longer than `min_stop_s` | a calibration and lane zones |
+| `stopped` | in a lane, it moves less over `min_stop_s` than a vehicle at `stop_speed_kmph` would | a calibration and lane zones |
 | `class_lane` | its class is listed in a lane's `banned_classes` and it stays there | lanes with that list |
 
 A rule that the scene cannot support is switched off with a warning, and the run goes on.
@@ -226,8 +227,10 @@ and the hard-shoulder and no-stopping rules (Rules 269 and 271):
 | `stopped` | 0 | The queuing carriageway moved at 31-46 km/h throughout |
 
 Nothing was flagged. That is a check against false alarms on one minute of ordinary
-traffic, not a measure of how many real violations the rules would catch: `wrong_way`, `restricted_zone` and `stopped` have never fired on real
-footage and are covered only by tests on scripted tracks.
+traffic, not a measure of how many real violations the rules would catch. Four of the five
+rules have never fired on real footage (`class_lane` has never been switched on), and
+`overspeed` has fired only under the lowered limit described below. They are covered by
+tests on scripted tracks.
 
 `class_lane` is not switched on for this scene. Highway Code Rule 265 bars vehicles over
 7.5 tonnes from the right-hand lane, but the detector's `truck` covers light vans and heavy
@@ -236,9 +239,28 @@ for every class, although goods vehicles over 7.5 tonnes are limited to 60 mph.
 
 To exercise the challan path, the same clip was run with the limit lowered to 90 km/h
 (`configs/highway_demo_limit.yaml`): 8 vehicles, measured at 105.7 to 110.7 km/h, were
-flagged and 8 challans drafted. Those vehicles were not speeding; that file exists only to
-demonstrate the path. The sample challan linked above comes from the freely licensed demo
-clip instead, with an uncalibrated speed and a limit chosen for illustration.
+flagged and 8 challans drafted. None of them was measured above the national limit, which
+is assumed to apply to this road; whether a temporary or variable limit was in force is
+not known. That file exists only to demonstrate the path.
+
+The sample challan linked above comes from the freely licensed demo clip instead. Its
+speed rests on an assumed distance and its limit was chosen for illustration; the challan
+says both, in its Site and Speed measured by lines.
+
+How the rules behave at their edges:
+
+- A rule that depends on the vehicle's class is checked again when the vehicle leaves, and
+  kept only if it holds for the class the record ends up with.
+- `stopped` is judged on distance moved over the whole period, not on a momentary speed:
+  far from the camera one pixel of box jitter is most of a metre. A vehicle cut by the
+  frame edge, or seen in fewer than half the frames of the period, is not judged.
+- Dwell time in a zone counts from the first sighting inside it to the latest one, frames
+  in which the tracker lost the vehicle included.
+- A violation belongs to a track. If the tracker gives a vehicle a new ID, a standing
+  violation can be recorded again.
+- If evidence images cannot be saved, the violation is still recorded and a warning is
+  printed. If they are missing when a challan is redrafted, the challan is drawn without
+  them and a warning is printed.
 
 ## Configure
 
@@ -340,8 +362,10 @@ speed carries the error bar described above.
   not to an owner.
 - The detector's `truck` class covers light vans and heavy lorries alike; rules that depend
   on the legal class of a vehicle cannot be applied reliably.
-- Three of the five rules have never fired on real footage.
+- Four of the five rules have never fired on real footage, and the fifth only under a
+  lowered limit.
 - The sample challan uses an uncalibrated clip and a limit chosen for illustration.
+- Challan PDFs use a built-in Latin font: other scripts, and the rupee sign, do not print.
 - A database made by an earlier version of this software is refused; use a new file.
 - Not real time: runs of the 1501-frame clip have taken between about three and eight
   minutes on the development laptop's GPU. The pipeline has not been profiled.

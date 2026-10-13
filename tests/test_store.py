@@ -213,6 +213,7 @@ def test_challan_details_before_and_after_a_challan(store):
     assert (after[0]["challan_no"], after[0]["status"]) == ("VA-1-0001", "pending_review")
     assert after[0]["created_at"] == "2026-10-13T12:00:00"
     assert after[1]["challan_no"] is None
+    assert (after[0]["pdf_path"], after[0]["speed_mode"]) == ("c/1.pdf", "homography")
 
 
 def test_saving_a_challan_again_updates_the_fine_and_keeps_its_identity(store):

@@ -10,6 +10,9 @@
 # because no section of the Act was found that clearly fits them:
 #   restricted_zone  (driving or waiting on a hard shoulder or restricted area)
 #   class_lane       (a vehicle class in a lane closed to it)
+# Section 177A (contravention of regulations made under section 118) is a candidate for
+# both, but the regulation that would have been contravened was not identified, so it is
+# not used.
 #
 # The detector's classes are not the Act's classes: it cannot tell a light motor vehicle
 # from a medium or heavy one. Where the penalty depends on that, both are quoted.

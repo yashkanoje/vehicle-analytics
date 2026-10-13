@@ -6,11 +6,14 @@ not an owner: no registration number is read.
 
 from __future__ import annotations
 
+import logging
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from xml.sax.saxutils import escape
 
 import yaml
 from reportlab.lib import colors
@@ -30,7 +33,14 @@ from reportlab.platypus import (
 from vehicle_analytics.config import RULE_NAMES, ConfigError
 from vehicle_analytics.store import Store
 
+logger = logging.getLogger(__name__)
+
 WATERMARK = "DEMONSTRATION - NOT A LEGAL DOCUMENT"
+NUMBER = re.compile(r"VA-\d+-(\d+)")
+SPEED_MODES = {
+    "homography": "Ground-plane calibration",
+    "two_line": "Assumed distance between two lines (not calibrated)",
+}
 NO_SCHEDULE = "As per applicable schedule"
 NOT_RECORDED = "Not recorded"
 RULE_TITLES = {
@@ -40,6 +50,10 @@ RULE_TITLES = {
     "stopped": "Stopping on the carriageway",
     "class_lane": "Vehicle class not permitted in this lane",
 }
+
+
+class ChallanError(RuntimeError):
+    """A challan PDF or its folder cannot be written."""
 
 
 @dataclass(frozen=True)
@@ -122,6 +136,8 @@ def challan_fields(
         fields.append(("Limit", f"{row['limit_value']:.1f} {unit}".strip()))
         if row["margin"] is not None:
             fields.append(("Tolerance applied", f"{row['margin']:.1f} {unit}".strip()))
+    if row["rule"] == "overspeed" and row["speed_mode"] in SPEED_MODES:
+        fields.append(("Speed measured by", SPEED_MODES[row["speed_mode"]]))
     fields += [
         ("Vehicle record", f"{row['vehicle_id']} (track {row['track_id']} in {row['video']})"),
         ("Vehicle class", row["class"]),
@@ -163,8 +179,14 @@ def render_pdf(
 ) -> None:
     styles = getSampleStyleSheet()
     table = Table(
-        [[Paragraph(label, styles["BodyText"]), Paragraph(value, styles["BodyText"])]
-         for label, value in fields],
+        # Escaped: Paragraph reads its text as markup, and site, lane and file names are data.
+        [
+            [
+                Paragraph(escape(label), styles["BodyText"]),
+                Paragraph(escape(value), styles["BodyText"]),
+            ]
+            for label, value in fields
+        ],
         colWidths=[60 * mm, 110 * mm],
     )
     table.setStyle(
@@ -199,6 +221,15 @@ def render_pdf(
     document.build(story, onFirstPage=_watermark, onLaterPages=_watermark)
 
 
+def run_output_folder(rows: Sequence[Mapping[str, Any]]) -> Path | None:
+    """The output folder a run's challans or evidence were written to, from its stored paths."""
+    for key in ("pdf_path", "evidence_path", "crop_path"):
+        for row in rows:
+            if row[key]:
+                return Path(row[key]).parents[2]  # <out>/<challans|evidence>/<run_id>/<file>
+    return None
+
+
 def generate_for_run(
     store: Store, run_id: int, fines: Mapping[str, Fine], out_dir: Path
 ) -> list[Path]:
@@ -207,9 +238,12 @@ def generate_for_run(
     if not rows:
         return []
     folder = Path(out_dir) / "challans" / str(run_id)
-    folder.mkdir(parents=True, exist_ok=True)
-    taken = [int(row["challan_no"].rsplit("-", 1)[1]) for row in rows if row["challan_no"]]
-    next_number = max(taken, default=0) + 1
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise ChallanError(f"cannot write challans to {folder}: {exc}") from exc
+    numbered = (NUMBER.fullmatch(row["challan_no"] or "") for row in rows)
+    next_number = max((int(match.group(1)) for match in numbered if match), default=0) + 1
     now = datetime.now().isoformat(timespec="seconds")
     paths: list[Path] = []
     for row in rows:
@@ -217,10 +251,18 @@ def generate_for_run(
         if challan_no is None:
             challan_no, created_at = f"VA-{run_id}-{next_number:04d}", now
             next_number += 1
+        for image in (row["evidence_path"], row["crop_path"]):
+            if image and not Path(image).is_file():
+                logger.warning(
+                    "challan %s: evidence image not found, left out: %s", challan_no, image
+                )
         fine = fines.get(row["rule"])
         path = folder / f"{challan_no}.pdf"
         fields = challan_fields(row, fine, challan_no, created_at)
-        render_pdf(path, fields, row["evidence_path"], row["crop_path"])
+        try:
+            render_pdf(path, fields, row["evidence_path"], row["crop_path"])
+        except OSError as exc:
+            raise ChallanError(f"cannot write challan {path}: {exc}") from exc
         store.save_challan(
             row["violation_id"],
             challan_no,

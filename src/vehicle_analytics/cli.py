@@ -9,7 +9,12 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from vehicle_analytics.calibrate import CalibrationError, calibration_yaml
-from vehicle_analytics.challan import generate_for_run, load_fines
+from vehicle_analytics.challan import (
+    ChallanError,
+    generate_for_run,
+    load_fines,
+    run_output_folder,
+)
 from vehicle_analytics.config import ConfigError, load_config
 from vehicle_analytics.pipeline import (
     FpsError,
@@ -93,11 +98,13 @@ def _run(args: argparse.Namespace) -> int:
             display=not args.no_display,
             store=store,
         )
+        # The run's results are reported before the challans are drafted, so that a
+        # failure there does not hide them.
+        print(f"frames: {result.frames_processed}  vehicles: {result.summary['total']}")
+        print(f"outputs: {result.out_dir}")
+        print(f"database: {args.db} (run {result.summary['run_id']})")
         challans = generate_for_run(store, result.summary["run_id"], fines, out_dir)
-    print(f"frames: {result.frames_processed}  vehicles: {result.summary['total']}")
     print(f"violations: {len(result.violations)}  challans drafted: {len(challans)}")
-    print(f"outputs: {result.out_dir}")
-    print(f"database: {args.db} (run {result.summary['run_id']})")
     return 0
 
 
@@ -112,7 +119,10 @@ def _challans(args: argparse.Namespace) -> int:
         if not store.has_run(args.run):
             raise StoreError(f"no run {args.run} in {args.db}")
         video = next(row["video"] for row in store.runs() if row["id"] == args.run)
-        out_dir = prepare_out_dir(args.out or Path("runs") / Path(video).stem)
+        # A redraft goes where the run's files already are; only a run that has none
+        # falls back to the default folder for its video.
+        earlier = run_output_folder(store.challan_details(args.run))
+        out_dir = prepare_out_dir(args.out or earlier or Path("runs") / Path(video).stem)
         paths = generate_for_run(store, args.run, fines, out_dir)
     plural = "challan" if len(paths) == 1 else "challans"
     print(f"{len(paths)} {plural} in {out_dir / 'challans' / str(args.run)}")
@@ -131,6 +141,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         FpsError,
         OutputError,
         StoreError,
+        ChallanError,
         CalibrationError,
     ) as exc:
         print(f"error: {exc}", file=sys.stderr)

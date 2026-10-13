@@ -1,6 +1,8 @@
 # Demo footage
 
-The animation in the README and `configs/demo.yaml` use this clip.
+The animation in the README, `configs/demo.yaml` and `docs/sample_challan.pdf` use this clip.
+The sample challan reproduces one frame of it and a crop of one vehicle, with a red outline
+added.
 
 | | |
 |---|---|

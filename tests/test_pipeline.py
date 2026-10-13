@@ -600,3 +600,38 @@ def test_violator_is_drawn_in_red_from_the_frame_it_is_caught(tmp_path, monkeypa
     )
     run_script(path_of("1", DOWN), 6, tmp_path, cfg=config(rules=overspeed(50)))
     assert flags == [False, False, False, False, False, True]
+
+
+def test_violation_is_dropped_when_the_final_class_does_not_break_the_rule(tmp_path, store):
+    # Called "truck" while the speed is measured, "car" for most of its life afterwards.
+    ys = DOWN + [130, 135, 140, 145, 150, 155, 160]
+    classes = ["truck"] * 6 + ["car"] * 7
+    script = {
+        frame: [Track("1", box(y, 150.0), cls_name)]
+        for frame, (y, cls_name) in enumerate(zip(ys, classes, strict=True), start=1)
+    }
+    rules = {"overspeed": {"limits_kmph": {"default": 1000, "truck": 10}}}
+    result = run_with_store(script, 13, tmp_path, store, cfg=config(rules=rules))
+    run_id = result.summary["run_id"]
+    assert result.records[0].cls_name == "car"
+    assert result.violations == [] and result.summary["violations"] == {}
+    assert store.violations(run_id) == []
+    evidence = result.out_dir / "evidence" / str(run_id)
+    assert not evidence.exists() or list(evidence.iterdir()) == []
+
+
+def test_evidence_that_cannot_be_saved_does_not_lose_the_violation(
+    tmp_path, store, monkeypatch, caplog
+):
+    def full_disk(*args, **kwargs):
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr("vehicle_analytics.pipeline.save_evidence", full_disk)
+    with caplog.at_level(logging.WARNING, logger="vehicle_analytics.pipeline"):
+        result = run_with_store(
+            path_at("1", DOWN, x=150.0), 6, tmp_path, store, cfg=config(rules=overspeed(50))
+        )
+    assert result.summary["violations"] == {"overspeed": 1}
+    (row,) = store.violations(result.summary["run_id"])
+    assert (row["evidence_path"], row["crop_path"]) == (None, None)
+    assert "evidence" in caplog.text and "No space left" in caplog.text

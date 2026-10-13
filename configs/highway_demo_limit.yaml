@@ -1,6 +1,7 @@
 # DEMONSTRATION ONLY. Identical to highway.yaml except for the speed limit, which is set
-# to 90 km/h, well below the road's real limit of 112.7 km/h, so that the challan path can
-# be exercised on this footage. The vehicles flagged with this file were not speeding.
+# to 90 km/h, well below the national limit of 112.7 km/h assumed for this road, so that
+# the challan path can be exercised on this footage. No vehicle flagged with this file was
+# measured above the national limit.
 #
 # Run configuration for the development clip: a UK motorway seen from an overbridge,
 # 640x360 at 25 fps. All image coordinates are fractions of frame width and height.
@@ -37,7 +38,10 @@ speed:
   distance_rel_uncertainty: 0.05
   jitter_px: 2.0
 
-# Rules. Sources: The Highway Code (gov.uk, last updated 22 October 2025).
+# Rules. Sources: The Highway Code (gov.uk, last updated 22 October 2025), in outline;
+# the rules have further cases (towing, articulated vehicles) that are not used here.
+# The national limit is assumed to apply: whether a temporary or variable limit was in
+# force when the clip was recorded is not known.
 #   Rule 124: national speed limit on motorways is 70 mph for cars, motorcycles and goods
 #     vehicles up to 7.5 tonnes, and 60 mph for goods vehicles over 7.5 tonnes.
 #     70 mph = 112.7 km/h (1 mph = 1.609344 km/h).
@@ -59,7 +63,7 @@ rules:
   restricted_zone:
     min_dwell_s: 2.0
   stopped:
-    stop_speed_kmph: 5.0
+    stop_speed_kmph: 5.0   # stopped = moved less than 5 km/h x 3 s = 4.2 m in 3 s
     min_stop_s: 3.0
 
 # Ground-plane calibration from the lane markings.
