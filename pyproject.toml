@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff>=0.6", "scipy>=1.11"]
+dev = ["pytest>=8.0", "ruff>=0.6", "scipy>=1.11", "pypdf>=4.0"]
 
 [project.scripts]
 vehicle-analytics = "vehicle_analytics.cli:main"
