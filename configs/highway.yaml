@@ -1,4 +1,4 @@
-# Run configuration for the development clip: a motorway seen from an overbridge,
+# Run configuration for the development clip: a UK motorway seen from an overbridge,
 # 640x360 at 25 fps. All image coordinates are fractions of frame width and height.
 
 model:
@@ -11,9 +11,11 @@ tracker:
   n_init: 3
   max_cosine_distance: 0.3
 
+# Both lines lie inside the calibrated stretch of road: about 31 m and 2.5 m from the
+# near end of the calibration zone, so the measurement zone is roughly 28.5 m long.
 lines:
-  a: [[0.0, 0.45], [1.0, 0.45]]
-  b: [[0.0, 0.65], [1.0, 0.65]]
+  a: [[0.0, 0.52], [1.0, 0.52]]
+  b: [[0.0, 0.72], [1.0, 0.72]]
 count_line: b
 
 # Label for a crossing of the count line onto its positive side (below it, for a
@@ -23,8 +25,40 @@ directions:
   negative: up
 
 speed:
-  # Assumed ground distance between the two lines. Used only while there is no
-  # calibration block; a calibration takes precedence.
-  meters_between_lines: 10.0
+  # Fallback distance between the lines, used only if the calibration block is removed.
+  meters_between_lines: 28.5
   distance_rel_uncertainty: 0.05
   jitter_px: 2.0
+
+# Ground-plane calibration from the lane markings.
+#
+# Dimensions (standards for new construction; the road itself was not surveyed):
+#   lane line: 2 m mark + 7 m gap = 9 m module
+#     Traffic Signs Manual, Chapter 5 (2019), Figure 2-3, diagram 1005.1 (speed limit over 40 mph)
+#     https://assets.publishing.service.gov.uk/media/5c4ace6ded915d38a0611abc/traffic-signs-manual-chapter-05.pdf
+#   middle lane of a dual three-lane motorway: 3.70 m (outer lanes 3.65 m)
+#     DMRB CD 127 version 1.0.1, Figure 2.1.1N1a
+#     https://www.standardsforhighways.co.uk/tses/attachments/10442706-b592-42c8-85f8-2a0c779a8e37
+#
+# Method: the centroids of 21 lane-line marks on both carriageways were measured on a
+# vehicle-free median image of the clip, and one ground plane was fitted to all of them by
+# least squares (reprojection error 1.0 px RMS, 1.6 px maximum). The four pairs below are
+# the corners of a 20.13 m x 36 m rectangle on that fitted plane, spanning both carriageways.
+# A first attempt from four corners of a single 3.70 m lane was rejected: it measured the
+# far carriageway 8 % short and 15 % narrow.
+#
+# Check against markings not used in the fit: each edge line lies 3.57-3.85 m from the
+# neighbouring lane line, against about 3.75 m expected (3.65 m lane plus half the edge
+# line), on all four sides and with no drift along the road. The 36 m zone length is
+# reproduced within 2 % on every lane line. distance_rel_uncertainty above reflects this.
+calibration:
+  image_points:
+    - [0.1909, 0.7623]
+    - [0.7891, 0.7540]
+    - [0.6263, 0.5052]
+    - [0.3662, 0.5034]
+  ground_points_m:
+    - [-16.43, 0.0]
+    - [3.70, 0.0]
+    - [3.70, 36.0]
+    - [-16.43, 36.0]
