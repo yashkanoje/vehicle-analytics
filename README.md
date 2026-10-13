@@ -136,8 +136,17 @@ most of it at the far line. Vehicles counted without a speed crossed only
 one of the two lines under a single track ID, or were still between the lines when the clip
 ended.
 
-**Count accuracy has not been checked against a manual count yet.** The counts above are
-the system's output only.
+Counts against a manual count of the same clip:
+
+| Direction | Manual count | System count | Difference |
+|---|---|---|---|
+| down (towards camera) | 83 | 83 | 0 |
+| up (away from camera) | 74 | 75 | +1 |
+
+The manual count was made once, by the author, on the annotated video at half speed, so it
+was not blind to the system's boxes. It does not say whether the extra vehicle in the
+queuing direction is a double count by the system or a miss by the person. One 60-second
+clip in daylight shows that the counts are close here; it is not an accuracy figure.
 
 Calibration, using lane-marking dimensions from UK design standards (lane line 2 m mark +
 7 m gap; middle lane 3.70 m, outer lanes 3.65 m — sources in `configs/highway.yaml`):
