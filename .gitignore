@@ -1,0 +1,26 @@
+# Third-party footage and model weights: never committed
+*.mp4
+*.avi
+*.pt
+*.onnx
+
+# Original coursework files, kept on disk only
+_original/
+
+# Working documents
+docs/superpowers/
+
+# Run outputs and local data
+runs/
+data/
+assets/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.venv/
+build/
+dist/
