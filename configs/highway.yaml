@@ -18,6 +18,9 @@ lines:
   b: [[0.0, 0.72], [1.0, 0.72]]
 count_line: b
 
+site:
+  name: Motorway overbridge (development clip)
+
 # Label for a crossing of the count line onto its positive side (below it, for a
 # left-to-right line) and onto its negative side.
 directions:
@@ -66,3 +69,39 @@ calibration:
     - [3.70, 0.0]
     - [3.70, 36.0]
     - [-16.43, 36.0]
+
+# Lanes and hard shoulders as image polygons. Each is a strip of the fitted ground plane
+# with the width given by DMRB CD 127 Figure 2.1.1N1a (lanes 3.65 / 3.70 / 3.65 m, hard
+# shoulder 3.30 m), 40 m long. Printed by tools/fit_highway_calibration.py and checked
+# against it by tests/test_calibration_evidence.py. Lane 1 is the nearside lane.
+zones:
+  - name: down_lane_3
+    kind: lane
+    polygon: [[0.5774, 0.7569], [0.6835, 0.7555], [0.5745, 0.4934], [0.5306, 0.493]]
+    allowed_direction: down
+  - name: down_lane_2
+    kind: lane
+    polygon: [[0.6835, 0.7555], [0.7891, 0.754], [0.6188, 0.4937], [0.5745, 0.4934]]
+    allowed_direction: down
+  - name: down_lane_1
+    kind: lane
+    polygon: [[0.7891, 0.754], [0.8915, 0.7526], [0.6621, 0.4941], [0.6188, 0.4937]]
+    allowed_direction: down
+  - name: down_shoulder
+    kind: shoulder
+    polygon: [[0.8915, 0.7526], [0.9826, 0.7513], [0.701, 0.4944], [0.6621, 0.4941]]
+  - name: up_lane_3
+    kind: lane
+    polygon: [[0.3052, 0.7607], [0.4161, 0.7592], [0.4645, 0.4925], [0.4197, 0.4922]]
+    allowed_direction: up
+  - name: up_lane_2
+    kind: lane
+    polygon: [[0.1908, 0.7623], [0.3052, 0.7607], [0.4197, 0.4922], [0.374, 0.4918]]
+    allowed_direction: up
+  - name: up_lane_1
+    kind: lane
+    polygon: [[0.0759, 0.7639], [0.1908, 0.7623], [0.374, 0.4918], [0.3286, 0.4914]]
+    allowed_direction: up
+  - name: up_shoulder
+    kind: shoulder
+    polygon: [[0.0, 0.7654], [0.0759, 0.7639], [0.3286, 0.4914], [0.2872, 0.4911]]

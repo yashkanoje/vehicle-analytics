@@ -52,3 +52,26 @@ def test_documented_checks_hold_for_the_committed_calibration(tool, committed):
     assert len(edge_distances) == 16
     assert min(edge_distances) == pytest.approx(3.62, abs=0.02)
     assert max(edge_distances) == pytest.approx(3.93, abs=0.02)
+
+
+def test_committed_zones_follow_from_the_fitted_plane(tool, committed):
+    expected = tool.lane_zones(tool.fit())
+    assert [zone.name for zone in committed.zones] == [zone["name"] for zone in expected]
+    for zone, want in zip(committed.zones, expected, strict=True):
+        assert zone.kind == want["kind"]
+        assert zone.allowed_direction == want.get("allowed_direction")
+        assert len(zone.polygon) == len(want["polygon"])
+        for got, point in zip(zone.polygon, want["polygon"], strict=True):
+            assert got == pytest.approx(point, abs=2e-3)
+
+
+def test_each_measured_lane_mark_borders_the_lanes_it_separates(tool, committed):
+    zones = {zone.name: zone for zone in committed.zones_px(WIDTH, HEIGHT)}
+    # A point half a lane to either side of the right carriageway's inner line.
+    homography = committed.homography_px(WIDTH, HEIGHT)
+    for mark in tool.RIGHT_INNER[1:5]:  # the nearest mark lies on the zones' near edge
+        x_m, y_m = homography.to_ground(mark)
+        left = tool.to_image(homography, (x_m - 1.8, y_m))
+        right = tool.to_image(homography, (x_m + 1.8, y_m))
+        assert zones["down_lane_3"].contains(left)
+        assert zones["down_lane_2"].contains(right)

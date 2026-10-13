@@ -151,6 +151,71 @@ def check(homography: Homography) -> Checks:
     return Checks(zone_length_m=zone_length, edge_distance_m=edge_distance)
 
 
+OUTER_LANE_M = 3.65  # DMRB CD 127 Figure 2.1.1N1a
+SHOULDER_M = 3.30
+ZONE_LENGTH_M = 40.0
+
+
+def to_image(homography: Homography, ground: Point) -> Point:
+    """Project a ground point (metres) back into the image (pixels)."""
+    x, y, w = np.linalg.inv(homography.matrix) @ np.array([ground[0], ground[1], 1.0])
+    return (float(x / w), float(y / w))
+
+
+def lane_zones(result: FitResult) -> list[dict]:
+    """Lanes and hard shoulders as image polygons, from their widths on the fitted plane."""
+    pixels = [(x * WIDTH, y * HEIGHT) for x, y in result.image_points]
+    homography = Homography.from_points(pixels, result.ground_points_m)
+    x0 = result.x0_m
+    bands = [
+        ("down_lane_3", "lane", -OUTER_LANE_M, 0.0, "down"),
+        ("down_lane_2", "lane", 0.0, LANE_M, "down"),
+        ("down_lane_1", "lane", LANE_M, LANE_M + OUTER_LANE_M, "down"),
+        (
+            "down_shoulder",
+            "shoulder",
+            LANE_M + OUTER_LANE_M,
+            LANE_M + OUTER_LANE_M + SHOULDER_M,
+            None,
+        ),
+        ("up_lane_3", "lane", x0, x0 + OUTER_LANE_M, "up"),
+        ("up_lane_2", "lane", x0 - LANE_M, x0, "up"),
+        ("up_lane_1", "lane", x0 - LANE_M - OUTER_LANE_M, x0 - LANE_M, "up"),
+        (
+            "up_shoulder",
+            "shoulder",
+            x0 - LANE_M - OUTER_LANE_M - SHOULDER_M,
+            x0 - LANE_M - OUTER_LANE_M,
+            None,
+        ),
+    ]
+    zones = []
+    for name, kind, x_from, x_to, direction in bands:
+        corners = [(x_from, 0.0), (x_to, 0.0), (x_to, ZONE_LENGTH_M), (x_from, ZONE_LENGTH_M)]
+        polygon = []
+        for corner in corners:
+            x, y = to_image(homography, corner)
+            # A zone that reaches past the frame edge is cut at the edge.
+            polygon.append(
+                [round(min(max(x / WIDTH, 0.0), 1.0), 4), round(min(max(y / HEIGHT, 0.0), 1.0), 4)]
+            )
+        zone = {"name": name, "kind": kind, "polygon": polygon}
+        if direction is not None:
+            zone["allowed_direction"] = direction
+        zones.append(zone)
+    return zones
+
+
+def print_zones(result: FitResult) -> None:
+    print("zones:")
+    for zone in lane_zones(result):
+        print(f"  - name: {zone['name']}")
+        print(f"    kind: {zone['kind']}")
+        print(f"    polygon: {zone['polygon']}")
+        if "allowed_direction" in zone:
+            print(f"    allowed_direction: {zone['allowed_direction']}")
+
+
 def main() -> None:
     result = fit()
     print(f"reprojection error: {result.rms_px:.2f} px RMS, {result.max_px:.2f} px max")
@@ -171,6 +236,7 @@ def main() -> None:
     print("lane line to edge line (expected about 3.75 m; not used by the fit):")
     for name, distances in checks.edge_distance_m.items():
         print(f"  {name:15s} " + "  ".join(f"{d:.2f}" for d in distances))
+    print_zones(result)
 
 
 if __name__ == "__main__":

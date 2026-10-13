@@ -17,6 +17,8 @@ speeds use an estimated distance and are for illustration only.*
   counted at most once.
 - Measures speed between two lines, either from a known distance or from a ground-plane
   calibration, and reports a one-sigma uncertainty with every speed.
+- Keeps one database row per vehicle: class, colour, lane, direction, times, speed and a
+  snapshot.
 - Writes an annotated video, a CSV with one row per vehicle, and a JSON summary.
 
 ## How it works
@@ -86,6 +88,61 @@ Outputs go to `runs/<video name>/`:
 | `events.csv` | `track_id, class, direction, counted_at_s, speed_kmph, speed_err_kmph, speed_mode` |
 | `summary.json` | Counts, flow, speed mean / median / max by direction, config used |
 
+## Records
+
+Each run adds a row to `runs` and one row per counted vehicle to `vehicles` in a SQLite
+file (`--db`, default `data/analytics.db`).
+
+| Column | Meaning |
+|---|---|
+| `class`, `colour` | Majority detector class; a coarse colour name from the vehicle's largest views |
+| `direction`, `lane` | Direction at the count line; the lane zone the vehicle was in when counted |
+| `first_seen_s`, `last_seen_s`, `counted_at_s` | Seconds from the start of the video |
+| `speed_kmph`, `speed_err_kmph`, `speed_mode` | Zone speed, its one-sigma error, and how the distance was obtained |
+| `snapshot_path` | The largest fully visible crop of the vehicle |
+| `plate` | Always empty: this software does not read number plates |
+
+Lanes are polygons in the config (`zones`). While a vehicle is between the lines the overlay
+shows its live speed with a `~`; the stored speed is the zone speed.
+
+```sql
+-- Traffic and mean speed per lane
+SELECT lane, direction, COUNT(*) AS vehicles, ROUND(AVG(speed_kmph), 1) AS mean_kmph
+FROM vehicles WHERE run_id = 1 GROUP BY lane, direction ORDER BY lane;
+
+-- The ten fastest vehicles, with their error bars
+SELECT track_id, class, colour, lane, ROUND(speed_kmph, 1), ROUND(speed_err_kmph, 1)
+FROM vehicles WHERE run_id = 1 ORDER BY speed_kmph DESC LIMIT 10;
+
+-- Vehicles counted per ten seconds of video
+SELECT CAST(counted_at_s / 10 AS INTEGER) * 10 AS from_s, COUNT(*) AS vehicles
+FROM vehicles WHERE run_id = 1 GROUP BY from_s ORDER BY from_s;
+```
+
+On the 60-second validation clip the first query gives:
+
+| Lane | Direction | Vehicles | Mean speed |
+|---|---|---|---|
+| `down_lane_1` (nearside) | down | 29 | 84.9 km/h |
+| `down_lane_2` | down | 26 | 94.5 km/h |
+| `down_lane_3` (offside) | down | 28 | 102.7 km/h |
+| `up_lane_1` (nearside) | up | 21 | 34.2 km/h |
+| `up_lane_2` | up | 28 | 35.9 km/h |
+| `up_lane_3` (offside) | up | 26 | 40.2 km/h |
+
+All 158 vehicles were given a lane on their own carriageway, and all have a snapshot. Lane
+assignment has not been checked vehicle by vehicle; the rise in speed from the nearside to
+the offside lane in both directions is what a motorway should show.
+
+**Colour is the weak attribute.** The method first specified (median colour of the middle of
+the crop) called 138 of the 158 vehicles blue, because the light in this footage has a blue
+cast (the bare road is far from grey) and the middle of a vehicle seen head-on is
+windscreen. The current method white-balances each crop against the road colour inside the
+lane zones of the same frame, reads the brighter half of the pixels, and judges black and
+white by brightness relative to the road. Of 12 snapshots judged by eye that were not used
+to develop it, 7 were right. The misses: two silver cars named green, one blue car named
+black, two black cars named grey and blue. Treat the column as a hint, not a fact.
+
 ## Configure
 
 See [configs/highway.yaml](configs/highway.yaml). All image coordinates are fractions of the
@@ -98,6 +155,8 @@ frame, so a config does not depend on resolution.
 | `directions` | Labels for the two crossing directions |
 | `speed.meters_between_lines` | Ground distance between the lines, when not calibrated |
 | `calibration` | Four image points and their ground coordinates in metres |
+| `zones` | Named polygons: lanes (with their allowed direction), hard shoulders, restricted areas |
+| `site`, `recording_start` | Where and when the video was recorded, stored with the run |
 | `fps_override` | Frame rate, for files that do not report one |
 
 ## Calibrate
@@ -174,6 +233,10 @@ speed carries the error bar described above.
 - Speed accuracy depends on the calibration dimensions, which are taken from road standards,
   not surveyed.
 - The detector is a general COCO model; vans are sometimes labelled as trucks.
+- Colour is a coarse name: 7 of 12 right on a spot check in dusk light at 360 pixels high.
+  It needs lane zones for its road reference; without them the colour of the light is not
+  removed.
+- Lanes are strips of the fitted ground plane with standard widths, not surveyed lanes.
 - Not real time: the 1501-frame clip above took about eight minutes on the development
   laptop's GPU, model loading included. The pipeline has not been profiled.
 
@@ -191,8 +254,7 @@ with no model and no video.
 
 ## Roadmap
 
-Per-vehicle records in SQLite, rule-based violation detection with photo evidence, and a
-local dashboard.
+Rule-based violation detection with photo evidence, and a local dashboard.
 
 ## Licence
 
