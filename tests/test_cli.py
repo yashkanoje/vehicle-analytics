@@ -1,3 +1,6 @@
+import subprocess
+import sys
+
 import cv2
 import numpy as np
 import pytest
@@ -148,3 +151,15 @@ def test_challans_command_drafts_pdfs_for_a_stored_run(tmp_path, capsys):
     assert code == 0
     assert (tmp_path / "o" / "challans" / str(run_id) / f"VA-{run_id}-0001.pdf").is_file()
     assert "1 challan" in capsys.readouterr().out
+
+
+def test_the_module_runs_as_a_program():
+    # `python -m vehicle_analytics.cli` must reach main(); calling main() in-process cannot show it.
+    done = subprocess.run(
+        [sys.executable, "-m", "vehicle_analytics.cli", "--help"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert done.returncode == 0
+    assert "usage: vehicle-analytics" in done.stdout
