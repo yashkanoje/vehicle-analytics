@@ -71,6 +71,7 @@ Python 3.10 or newer.
 
 ```bash
 pip install -e .
+pip install -e ".[dashboard]"   # optional: the local dashboard (Streamlit, pandas)
 ```
 
 YOLO weights download on first run.
@@ -80,6 +81,7 @@ YOLO weights download on first run.
 ```bash
 vehicle-analytics run VIDEO --config configs/highway.yaml
 vehicle-analytics run VIDEO --config configs/highway.yaml --out runs/my-run --no-display
+vehicle-analytics dashboard   # browse runs and review challans (needs the dashboard extra)
 ```
 
 Outputs go to `runs/<video name>/`:
@@ -390,7 +392,7 @@ speed carries the error bar described above.
 ## Development
 
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[dev,dashboard]"
 pytest
 ruff check .
 ```
@@ -399,9 +401,40 @@ The geometry, crossing, speed, state and statistics modules are pure Python and 
 pipeline takes its detector and tracker as arguments, so its tests run on scripted tracks
 with no model and no video.
 
+## Dashboard
+
+A local web app over the database, for browsing what a run recorded and reviewing its
+draft challans.
+
+```bash
+vehicle-analytics dashboard --db data/analytics.db   # then open the URL it prints
+```
+
+It listens on this computer only (localhost) and sends no usage statistics.
+
+- **Overview**: vehicles counted by direction and class, flow per hour, a speed histogram
+  and violations by rule, for the run chosen in the sidebar.
+- **Vehicles**: the vehicle table, filtered by class, colour, lane, direction and speed
+  range; choosing a vehicle shows its snapshot and any violations.
+- **Violations**: each violation with its evidence images, the measured value, limit and
+  tolerance, the challan PDF, and Approve / Reject.
+
+Approve and Reject are the only things the dashboard changes. A decision is stored with
+its time and the challan PDF is reprinted to show it. A later `vehicle-analytics challans`
+redraft keeps both the decision and the challan number.
+
+Stored image and PDF paths are relative to the folder the run was started from. Start the
+dashboard from that folder, or pass it with `--root`.
+
+![Dashboard overview](docs/dashboard_overview.png)
+![Dashboard violations](docs/dashboard_violations.png)
+
+The screenshots are of the freely licensed demo clip. That configuration has no lane
+zones, so its lane column is empty.
+
 ## Roadmap
 
-A local dashboard for browsing records and reviewing draft challans.
+Number-plate reading, tailgating, live streams.
 
 ## Licence
 
