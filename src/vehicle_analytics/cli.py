@@ -1,11 +1,14 @@
-"""Command line entry point: `vehicle-analytics run` and `vehicle-analytics calibrate`."""
+"""Command line entry point: run, calibrate, challans and dashboard."""
 
 from __future__ import annotations
 
 import argparse
 import logging
+import os
+import subprocess
 import sys
 from collections.abc import Sequence
+from importlib.util import find_spec
 from pathlib import Path
 
 from vehicle_analytics.calibrate import CalibrationError, calibration_yaml
@@ -25,6 +28,7 @@ from vehicle_analytics.pipeline import (
     run,
 )
 from vehicle_analytics.store import Store, StoreError
+from vehicle_analytics.views import DB_ENV, ROOT_ENV
 
 USER_ERROR = 2
 
@@ -70,6 +74,18 @@ def build_parser() -> argparse.ArgumentParser:
     challans_parser.add_argument("--db", type=Path, default=Path("data") / "analytics.db")
     challans_parser.add_argument("--out", type=Path, help="default: runs/<video name of the run>")
     challans_parser.add_argument("--fines", type=Path)
+
+    dashboard_parser = commands.add_parser(
+        "dashboard", help="browse the database and review challans in a local web app"
+    )
+    dashboard_parser.add_argument("--db", type=Path, default=Path("data") / "analytics.db")
+    dashboard_parser.add_argument(
+        "--root",
+        type=Path,
+        default=Path("."),
+        help="folder the runs were started from; stored file paths are relative to it "
+        "(default: the current folder)",
+    )
     return parser
 
 
@@ -129,10 +145,42 @@ def _challans(args: argparse.Namespace) -> int:
     return 0
 
 
+def _dashboard(args: argparse.Namespace) -> int:
+    problem = None
+    if find_spec("streamlit") is None:
+        problem = 'the dashboard needs Streamlit: pip install "vehicle-analytics[dashboard]"'
+    elif not args.db.is_file():
+        problem = f"no database at {args.db}"  # opening it would create an empty one
+    elif not args.root.is_dir():
+        problem = f"--root {args.root} is not a folder"
+    if problem:
+        print(f"error: {problem}", file=sys.stderr)
+        return USER_ERROR
+    app = Path(__file__).with_name("dashboard.py")
+    env = {**os.environ, DB_ENV: str(args.db.resolve()), ROOT_ENV: str(args.root.resolve())}
+    command = [
+        sys.executable, "-m", "streamlit", "run", str(app),
+        # Local only: no listening on the network, no usage statistics, no first-run prompt.
+        "--server.address", "localhost",
+        "--server.headless", "true",
+        "--browser.gatherUsageStats", "false",
+    ]
+    print("Starting the dashboard: open the Local URL below. Ctrl-C stops it.")
+    try:
+        return subprocess.run(command, env=env, check=False).returncode
+    except KeyboardInterrupt:  # Ctrl-C stops Streamlit; that is how the dashboard is closed
+        return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     logging.basicConfig(level=logging.WARNING, format="warning: %(message)s")
     args = build_parser().parse_args(argv)
-    handlers = {"run": _run, "calibrate": _calibrate, "challans": _challans}
+    handlers = {
+        "run": _run,
+        "calibrate": _calibrate,
+        "challans": _challans,
+        "dashboard": _dashboard,
+    }
     try:
         return handlers[args.command](args)
     except (

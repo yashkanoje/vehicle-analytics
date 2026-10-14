@@ -1,5 +1,6 @@
 import subprocess
 import sys
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -197,3 +198,51 @@ def test_challans_that_cannot_be_written_return_2(tmp_path, monkeypatch, capsys)
     code = main(["challans", "--run", str(run_id), "--db", "a.db", "--out", "blocked"])
     assert code == 2
     assert "cannot write challan" in capsys.readouterr().err
+
+
+def test_dashboard_starts_streamlit_on_the_database(tmp_path, monkeypatch):
+    from vehicle_analytics.store import Store
+
+    Store(tmp_path / "a.db").close()
+    calls = []
+
+    def fake_run(command, env, check):
+        calls.append((command, env))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr("vehicle_analytics.cli.subprocess.run", fake_run)
+    code = main(["dashboard", "--db", str(tmp_path / "a.db"), "--root", str(tmp_path)])
+    assert code == 0
+    ((command, env),) = calls
+    assert command[:4] == [sys.executable, "-m", "streamlit", "run"]
+    assert command[4].endswith("dashboard.py") and Path(command[4]).is_file()
+    flags = " ".join(command[5:])
+    assert "--server.address localhost" in flags  # not reachable from the network
+    assert "--browser.gatherUsageStats false" in flags  # nothing sent out
+    assert "--server.headless true" in flags  # no first-run email prompt
+    assert env["VEHICLE_ANALYTICS_DB"] == str((tmp_path / "a.db").resolve())
+    assert env["VEHICLE_ANALYTICS_ROOT"] == str(tmp_path.resolve())
+
+
+def test_dashboard_on_a_missing_database_returns_2_and_creates_nothing(tmp_path, capsys):
+    assert main(["dashboard", "--db", str(tmp_path / "typo.db")]) == 2
+    assert "no database at" in capsys.readouterr().err
+    assert not (tmp_path / "typo.db").exists()
+
+
+def test_dashboard_with_a_root_that_is_not_a_folder_returns_2(tmp_path, capsys):
+    from vehicle_analytics.store import Store
+
+    Store(tmp_path / "a.db").close()
+    code = main(["dashboard", "--db", str(tmp_path / "a.db"), "--root", str(tmp_path / "no")])
+    assert code == 2
+    assert "not a folder" in capsys.readouterr().err
+
+
+def test_dashboard_without_streamlit_returns_2(tmp_path, monkeypatch, capsys):
+    from vehicle_analytics.store import Store
+
+    Store(tmp_path / "a.db").close()
+    monkeypatch.setattr("vehicle_analytics.cli.find_spec", lambda name: None)
+    assert main(["dashboard", "--db", str(tmp_path / "a.db")]) == 2
+    assert "pip install" in capsys.readouterr().err
