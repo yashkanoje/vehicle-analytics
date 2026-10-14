@@ -165,7 +165,7 @@ def _dashboard(args: argparse.Namespace) -> int:
         "--server.headless", "true",
         "--browser.gatherUsageStats", "false",
     ]
-    print("Starting the dashboard: open the Local URL below. Ctrl-C stops it.")
+    print("Starting the dashboard: open the URL it prints below. Ctrl-C stops it.")
     try:
         return subprocess.run(command, env=env, check=False).returncode
     except KeyboardInterrupt:  # Ctrl-C stops Streamlit; that is how the dashboard is closed

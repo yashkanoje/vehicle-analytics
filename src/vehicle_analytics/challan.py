@@ -293,6 +293,9 @@ def review(
     `root` is the folder the run was started from: stored paths are relative to it. The
     section and penalty printed are the ones stored with the challan.
     """
+    # shortcut: save, re-read and reprint are not atomic; two sessions reviewing one challan
+    # at once can leave the PDF showing the other decision. Fine for a single-user local tool;
+    # lock per challan if it ever serves several reviewers.
     store.set_challan_status(violation_id, decision)
     row = next(r for r in store.challan_details(run_id) if r["violation_id"] == violation_id)
     fine = Fine(row["section"], row["description"], row["penalty"], None)
@@ -302,4 +305,7 @@ def review(
     try:
         render_pdf(path, fields, evidence and str(evidence), crop and str(crop))
     except OSError as exc:
-        raise ChallanError(f"decision saved, but challan {path} was not reprinted: {exc}") from exc
+        raise ChallanError(
+            f"decision saved, but challan {path} was not reprinted: {exc}; "
+            "close any program using the file, then click the button again"
+        ) from exc

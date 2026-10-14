@@ -59,15 +59,18 @@ def overview_page(store: Store, run: Mapping[str, Any]) -> None:
     left, right = st.columns(2)
     with left:
         st.subheader("By direction")
-        st.dataframe(
-            pd.DataFrame(
-                [
-                    {"direction": d, "vehicles": n, "per hour": summary.flow_per_hour.get(d)}
-                    for d, n in summary.by_direction.items()
-                ]
-            ),
-            hide_index=True,
-        )
+        if summary.by_direction:
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {"direction": d, "vehicles": n, "per hour": summary.flow_per_hour.get(d)}
+                        for d, n in summary.by_direction.items()
+                    ]
+                ),
+                hide_index=True,
+            )
+        else:
+            st.caption("No counted vehicles in this run.")
         st.subheader("By class")
         bar_chart(summary.by_class, "vehicles", "No counted vehicles in this run.")
     with right:
@@ -177,9 +180,9 @@ def violation_card(store: Store, run: Mapping[str, Any], row: Mapping[str, Any],
         approve, reject = st.columns(2)
         decision = None
         key = row["violation_id"]
-        if approve.button("Approve", key=f"approve_{key}", disabled=row["status"] == "approved"):
+        if approve.button("Approve", key=f"approve_{key}"):
             decision = "approved"
-        if reject.button("Reject", key=f"reject_{key}", disabled=row["status"] == "rejected"):
+        if reject.button("Reject", key=f"reject_{key}"):
             decision = "rejected"
         if decision:
             try:
@@ -189,7 +192,7 @@ def violation_card(store: Store, run: Mapping[str, Any], row: Mapping[str, Any],
             st.rerun()
 
 
-def violations_page(store: Store, run: Mapping[str, Any], root: Path) -> None:
+def violations_page(store: Store, run: Mapping[str, Any], root: Path, db: Path) -> None:
     warning = st.session_state.pop("review_warning", None)
     if warning:
         st.warning(warning)
@@ -201,7 +204,7 @@ def violations_page(store: Store, run: Mapping[str, Any], root: Path) -> None:
     if undrafted:
         st.info(
             f"{undrafted} of {len(rows)} violations have no challan yet. Draft them with "
-            f"`vehicle-analytics challans --run {run['id']}`, run from {root}."
+            f"`vehicle-analytics challans --run {run['id']} --db {db}`, run from {root}."
         )
     for row in rows:
         with st.container(border=True):
@@ -242,7 +245,7 @@ def main() -> None:
             elif page == "Vehicles":
                 vehicles_page(store, run, root)
             else:
-                violations_page(store, run, root)
+                violations_page(store, run, root, db)
     except StoreError as exc:
         st.error(str(exc))
 

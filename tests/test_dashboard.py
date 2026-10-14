@@ -162,3 +162,45 @@ def test_a_database_without_runs(site, tmp_path, monkeypatch):
     monkeypatch.setenv(DB_ENV, str(empty))
     at = app()
     assert not at.exception and "No runs" in at.info[0].value
+
+
+def pdf_text(path):
+    return " ".join(p.extract_text() for p in PdfReader(path).pages)
+
+
+def test_violations_page_rejects_a_challan(site):
+    at = go(app(), "Violations")
+    at.button(key="reject_1").click().run()
+    assert not at.exception
+    assert "Rejected by a reviewer" in texts(at)
+    with Store(site / "data" / "analytics.db") as store:
+        (row,) = store.challan_details(1)
+    assert row["status"] == "rejected"
+
+
+def test_a_failed_reprint_can_be_retried(site):
+    pdf = site / "runs" / "clip" / "challans" / "1" / "VA-1-0001.pdf"
+    pdf.unlink()
+    pdf.mkdir()  # a folder in the PDF's place makes the write fail on every platform
+    at = go(app(), "Violations")
+    at.button(key="approve_1").click().run()
+    assert not at.exception
+    assert "decision saved" in at.warning[0].value
+    assert "Approved by a reviewer" in texts(at)
+    assert not at.button(key="approve_1").disabled
+    pdf.rmdir()
+    at.button(key="approve_1").click().run()
+    assert not at.exception
+    assert "Approved by a reviewer" in pdf_text(pdf)
+
+
+def test_the_draft_hint_names_the_database(site):
+    db = site / "data" / "analytics.db"
+    with Store(db) as store:
+        lorry = next(v for v in store.vehicles(1) if v["track_id"] == "8")
+        store.add_violation(lorry["id"], Violation("restricted_zone", 5.0, zone="bay"), None, None)
+    at = go(app(), "Violations")
+    info = at.info[0].value
+    assert "1 of 2 violations have no challan yet" in info
+    assert f"--db {db}" in info
+

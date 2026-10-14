@@ -43,7 +43,7 @@ def run_overview(run: Row, vehicles: Sequence[Row], violations: Sequence[Row]) -
         by_direction=by_direction,
         by_class=dict(Counter(v["class"] for v in counted)),
         flow_per_hour=(
-            {d: n / duration * 3600 for d, n in by_direction.items()} if duration else {}
+            {d: round(n / duration * 3600, 1) for d, n in by_direction.items()} if duration else {}
         ),
         speeds_kmph=[v["speed_kmph"] for v in counted if v["speed_kmph"] is not None],
         violations_by_rule=dict(Counter(v["rule"] for v in violations)),
