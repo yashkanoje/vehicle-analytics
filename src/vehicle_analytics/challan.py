@@ -31,7 +31,7 @@ from reportlab.platypus import (
 )
 
 from vehicle_analytics.config import RULE_NAMES, ConfigError
-from vehicle_analytics.store import Store
+from vehicle_analytics.store import Store, resolve_path
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,11 @@ SPEED_MODES = {
 }
 NO_SCHEDULE = "As per applicable schedule"
 NOT_RECORDED = "Not recorded"
+STATUS_TEXT = {
+    "pending_review": "Pending review",
+    "approved": "Approved by a reviewer",
+    "rejected": "Rejected by a reviewer",
+}
 RULE_TITLES = {
     "overspeed": "Exceeding the speed limit",
     "wrong_way": "Driving against the permitted direction",
@@ -108,7 +113,7 @@ def load_fines(path: str | Path) -> dict[str, Fine]:
     return fines
 
 
-def _when(row: Mapping[str, Any]) -> str:
+def when_text(row: Mapping[str, Any]) -> str:
     if row["recording_start"]:
         moment = datetime.fromisoformat(row["recording_start"]) + timedelta(seconds=row["at_s"])
         return moment.strftime("%Y-%m-%d %H:%M:%S")
@@ -122,10 +127,14 @@ def challan_fields(
     site = ", ".join(part for part in (row["site_name"], row["site_location"]) if part)
     fields = [
         ("Challan no.", challan_no),
-        ("Status", "Pending review"),
+        ("Status", STATUS_TEXT[row["status"] or "pending_review"]),
         ("Drafted", created_at.replace("T", " ")),
+    ]
+    if row["reviewed_at"]:
+        fields.append(("Reviewed", row["reviewed_at"].replace("T", " ")))
+    fields += [
         ("Violation", RULE_TITLES[row["rule"]]),
-        ("Date and time", _when(row)),
+        ("Date and time", when_text(row)),
         ("Site", site or NOT_RECORDED),
     ]
     if row["zone"]:
@@ -274,3 +283,23 @@ def generate_for_run(
         )
         paths.append(path)
     return paths
+
+
+def review(
+    store: Store, run_id: int, violation_id: int, decision: str, root: str | Path
+) -> None:
+    """Record a reviewer's decision on a challan and reprint its PDF so the two agree.
+
+    `root` is the folder the run was started from: stored paths are relative to it. The
+    section and penalty printed are the ones stored with the challan.
+    """
+    store.set_challan_status(violation_id, decision)
+    row = next(r for r in store.challan_details(run_id) if r["violation_id"] == violation_id)
+    fine = Fine(row["section"], row["description"], row["penalty"], None)
+    fields = challan_fields(row, fine, row["challan_no"], row["created_at"])
+    path = resolve_path(row["pdf_path"], root)
+    evidence, crop = (resolve_path(row[key], root) for key in ("evidence_path", "crop_path"))
+    try:
+        render_pdf(path, fields, evidence and str(evidence), crop and str(crop))
+    except OSError as exc:
+        raise ChallanError(f"decision saved, but challan {path} was not reprinted: {exc}") from exc

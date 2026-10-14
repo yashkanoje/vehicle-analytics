@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -12,6 +13,7 @@ from vehicle_analytics.challan import (
     generate_for_run,
     load_fines,
     render_pdf,
+    review,
 )
 from vehicle_analytics.config import ConfigError
 from vehicle_analytics.rules import Violation
@@ -38,6 +40,8 @@ ROW = {
     "site_location": "Staffordshire",
     "recording_start": "2025-12-08T17:30:00",
     "speed_mode": "homography",
+    "status": None,
+    "reviewed_at": None,
 }
 PENALTY = {"default": "Rs. 1,000", "truck": "Rs. 2,000"}
 FINE = Fine("s. 183(1)", "Driving at excessive speed", PENALTY, "x")
@@ -51,6 +55,7 @@ def test_fields_for_a_speeding_car():
     fields = as_dict(challan_fields(ROW, FINE, "VA-1-0001", "2026-10-13T12:00:00"))
     assert fields["Challan no."] == "VA-1-0001"
     assert fields["Status"] == "Pending review"
+    assert "Reviewed" not in fields
     assert fields["Violation"] == "Exceeding the speed limit"
     assert fields["Measured"] == "121.4 km/h"
     assert fields["Limit"] == "100.0 km/h"
@@ -286,3 +291,47 @@ def test_a_challan_number_of_another_shape_is_ignored_when_numbering(store, tmp_
     generate_for_run(store, run_id, {}, tmp_path / "out")
     numbers = sorted(row["challan_no"] for row in store.challan_details(run_id))
     assert numbers == ["LEGACY", f"VA-{run_id}-0001"]
+
+
+def test_fields_show_the_review():
+    row = {**ROW, "status": "approved", "reviewed_at": "2026-10-15T09:30:00"}
+    fields = as_dict(challan_fields(row, FINE, "VA-1-0001", "2026-10-13T12:00:00"))
+    assert fields["Status"] == "Approved by a reviewer"
+    assert fields["Reviewed"] == "2026-10-15 09:30:00"
+
+
+def test_redraft_after_a_review_prints_the_decision_and_keeps_the_number(store, tmp_path):
+    run_id = seeded(store, tmp_path)
+    first = generate_for_run(store, run_id, {"overspeed": FINE}, tmp_path / "out")[0]
+    violation_id = store.challan_details(run_id)[0]["violation_id"]
+    store.set_challan_status(violation_id, "rejected")
+    again = generate_for_run(store, run_id, {"overspeed": FINE}, tmp_path / "out")[0]
+    assert again == first
+    text = pdf_text(first)
+    assert "Rejected by a reviewer" in text and "Pending review" not in text
+
+
+def test_review_reprints_the_pdf_from_another_working_folder(store, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    run_id = seeded(store, tmp_path)
+    generate_for_run(store, run_id, {"overspeed": FINE}, Path("out"))  # relative paths stored
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    # Rows are in time order: the shoulder violation (5.0 s) is 0001, the speeding one 0002.
+    speeding = next(r for r in store.challan_details(run_id) if r["rule"] == "overspeed")
+    review(store, run_id, speeding["violation_id"], "approved", root=tmp_path)
+    text = pdf_text(tmp_path / "out" / "challans" / str(run_id) / f"VA-{run_id}-0002.pdf")
+    assert "Approved by a reviewer" in text and "s. 183(1)" in text
+    assert not (elsewhere / "out").exists()
+
+
+def test_a_reprint_that_fails_keeps_the_decision_and_says_so(store, tmp_path):
+    run_id = seeded(store, tmp_path)
+    pdf = generate_for_run(store, run_id, {"overspeed": FINE}, tmp_path / "out")[0]
+    pdf.unlink()
+    pdf.mkdir()  # a folder where the PDF should be: it cannot be written
+    violation_id = store.challan_details(run_id)[0]["violation_id"]
+    with pytest.raises(ChallanError, match="decision saved"):
+        review(store, run_id, violation_id, "approved", root=tmp_path)
+    assert store.challan_details(run_id)[0]["status"] == "approved"
