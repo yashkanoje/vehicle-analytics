@@ -12,6 +12,19 @@ from vehicle_analytics.rules import Violation
 from vehicle_analytics.state import VehicleRecord
 
 SCHEMA_VERSION = 2
+REVIEW_DECISIONS = ("approved", "rejected")
+
+
+def resolve_path(stored: str | None, root: str | Path) -> Path | None:
+    """A file path from the database, made usable from any working folder.
+
+    Paths are stored as the run wrote them, so a relative one is relative to the folder the
+    run was started from. The caller passes that folder as `root`.
+    """
+    if not stored:
+        return None
+    path = Path(stored)
+    return path if path.is_absolute() else Path(root) / path
 
 
 class StoreError(RuntimeError):
@@ -184,6 +197,23 @@ class Store:
         except sqlite3.IntegrityError as exc:
             raise StoreError(f"cannot store challan {challan_no}: {exc}") from exc
 
+    def set_challan_status(self, violation_id: int, status: str) -> str:
+        """Record a reviewer's decision on the challan of a violation; returns when."""
+        if status not in REVIEW_DECISIONS:
+            raise ValueError(f"a review decision is one of {REVIEW_DECISIONS}, not {status!r}")
+        reviewed_at = datetime.now().isoformat(timespec="seconds")
+        try:
+            with self._db:
+                changed = self._db.execute(
+                    "UPDATE challans SET status = ?, reviewed_at = ? WHERE violation_id = ?",
+                    (status, reviewed_at, violation_id),
+                ).rowcount
+        except sqlite3.Error as exc:
+            raise StoreError(f"cannot write to database {self.path}: {exc}") from exc
+        if changed == 0:
+            raise StoreError(f"violation {violation_id} has no challan to review")
+        return reviewed_at
+
     def runs(self) -> list[sqlite3.Row]:
         return self._db.execute("SELECT * FROM runs ORDER BY id").fetchall()
 
@@ -208,7 +238,8 @@ class Store:
             " veh.id AS vehicle_id, veh.track_id, veh.class, veh.colour, veh.lane,"
             " veh.direction, veh.speed_mode,"
             " r.video, r.site_name, r.site_location, r.recording_start,"
-            " c.id AS challan_id, c.challan_no, c.created_at, c.status, c.pdf_path"
+            " c.id AS challan_id, c.challan_no, c.created_at, c.status, c.reviewed_at, c.pdf_path,"
+            " c.section, c.description, c.penalty"
             " FROM violations v"
             " JOIN vehicles veh ON veh.id = v.vehicle_id"
             " JOIN runs r ON r.id = veh.run_id"

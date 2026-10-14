@@ -6,7 +6,7 @@ import pytest
 
 from vehicle_analytics.rules import Violation
 from vehicle_analytics.state import VehicleRecord
-from vehicle_analytics.store import Store, StoreError
+from vehicle_analytics.store import Store, StoreError, resolve_path
 
 
 def record(track_id="7", **changes):
@@ -252,3 +252,58 @@ def test_a_current_database_reopens(tmp_path):
         run_id, _, _ = seeded(first)
     with Store(path) as second:
         assert len(second.violations(run_id)) == 2
+
+
+def test_paths_are_resolved_against_the_folder_the_run_was_started_from(tmp_path):
+    assert resolve_path("runs/a/7.jpg", tmp_path) == tmp_path / "runs" / "a" / "7.jpg"
+    absolute = tmp_path / "x.jpg"
+    assert resolve_path(str(absolute), "somewhere_else") == absolute
+    assert resolve_path(None, tmp_path) is None
+    assert resolve_path("", tmp_path) is None
+
+
+def challan_row(store, run_id, violation_id):
+    (row,) = [r for r in store.challan_details(run_id) if r["violation_id"] == violation_id]
+    return row
+
+
+def test_a_challan_can_be_approved_and_then_rejected(store):
+    run_id, first, _ = seeded(store)
+    store.save_challan(first, "VA-1-0001", "2026-10-13T12:00:00", None, None, None, "c/1.pdf")
+    assert challan_row(store, run_id, first)["reviewed_at"] is None
+    when = store.set_challan_status(first, "approved")
+    row = challan_row(store, run_id, first)
+    assert (row["status"], row["reviewed_at"]) == ("approved", when)
+    store.set_challan_status(first, "rejected")
+    assert challan_row(store, run_id, first)["status"] == "rejected"
+
+
+def test_redrafting_a_challan_keeps_its_review(store):
+    run_id, first, _ = seeded(store)
+    store.save_challan(first, "VA-1-0001", "2026-10-13T12:00:00", None, None, None, "c/1.pdf")
+    when = store.set_challan_status(first, "approved")
+    store.save_challan(first, "VA-1-0001", "2026-10-13T12:00:00", "s. 183", None, None, "c/1.pdf")
+    row = challan_row(store, run_id, first)
+    assert (row["status"], row["reviewed_at"], row["section"]) == ("approved", when, "s. 183")
+
+
+def test_a_review_needs_a_challan_and_a_decision(store):
+    run_id, first, second = seeded(store)
+    with pytest.raises(StoreError, match="no challan"):
+        store.set_challan_status(second, "approved")
+    store.save_challan(first, "VA-1-0001", "2026-10-13T12:00:00", None, None, None, "c/1.pdf")
+    with pytest.raises(ValueError, match="pending_review"):
+        store.set_challan_status(first, "pending_review")
+
+
+def test_challan_details_carry_the_stored_fine(store):
+    run_id, first, _ = seeded(store)
+    store.save_challan(
+        first, "VA-1-0001", "2026-10-13T12:00:00", "s. 183", "Speeding", "Rs. 1,000", "c/1.pdf"
+    )
+    row = challan_row(store, run_id, first)
+    assert (row["section"], row["description"], row["penalty"]) == (
+        "s. 183",
+        "Speeding",
+        "Rs. 1,000",
+    )
