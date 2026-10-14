@@ -121,14 +121,18 @@ def stopped_rule():
 
 
 class Traffic:
-    """A car driving up the next lane at 36 km/h, so the carriageway is seen flowing."""
+    """A car every two seconds up the next lane, 1 m per frame, passing y = 50 px."""
 
-    def __init__(self, rule):
-        self.rule, self.state = rule, TrackState("passing")
+    def __init__(self, rule, to_ground=metres):
+        self.rule, self.to_ground, self.cars = rule, to_ground, {}
 
     def step(self, frame):
-        self.state.observe(frame, (150.0, 10.0 * frame), "car", [], metres, [UP_LANE, NEXT_LANE])
-        self.rule.update(self.state, frame / FPS)
+        if frame % 20 == 1:
+            self.cars[frame] = TrackState(f"passing_{frame}")
+        for start, state in self.cars.items():
+            point = (150.0, 10.0 * (frame - start) - 100.0)
+            state.observe(frame, point, "car", [], self.to_ground, [UP_LANE, NEXT_LANE])
+            self.rule.update(state, frame / FPS)
 
 
 def test_stopped_fires_after_standing_still_in_a_lane():
@@ -214,7 +218,7 @@ def far_away(p):
 def test_stopped_is_not_defeated_by_box_jitter_far_from_the_camera():
     # One pixel of jitter is 0.8 m here: over half a second that reads as 6 km/h.
     rule, state = stopped_rule(), TrackState("7")
-    traffic = Traffic(rule)
+    traffic = Traffic(rule, far_away)
     fired = []
     for frame in range(1, 61):
         traffic.step(frame)
@@ -271,7 +275,8 @@ def stopped_in_scene(paths, frames=60):
 
 def test_stopped_flags_a_breakdown_while_the_next_lane_flows():
     fired = stopped_in_scene({"broken": stands(50, 500), "passing": drives(150)})
-    assert fired == {"broken": [31], "passing": []}
+    # Standing for 3 s by frame 31, but flagged only once the passing car reaches it.
+    assert fired == {"broken": [51], "passing": []}
 
 
 def test_stopped_does_not_flag_a_vehicle_on_an_otherwise_empty_road():
@@ -303,7 +308,7 @@ def test_stopped_flags_only_the_head_of_a_queue_behind_a_breakdown():
             "passing": drives(150),
         }
     )
-    assert fired == {"broken": [31], "behind_1": [], "behind_2": [], "passing": []}
+    assert fired == {"broken": [51], "behind_1": [], "behind_2": [], "passing": []}
 
 
 def test_stopped_does_not_flag_two_vehicles_that_stopped_together_in_one_lane():
@@ -311,6 +316,19 @@ def test_stopped_does_not_flag_two_vehicles_that_stopped_together_in_one_lane():
         {"front": stands(50, 500), "back": stands(50, 450), "passing": drives(150)}
     )
     assert fired == {"front": [], "back": [], "passing": []}
+
+
+def test_stopped_does_not_take_a_vehicle_joining_the_queue_as_flow():
+    fired = stopped_in_scene(
+        {"head": stands(50, 500), "follower": lambda frame: (50.0, min(10.0 * frame, 450.0))}
+    )
+    assert fired == {"head": [], "follower": []}
+
+
+def test_stopped_does_not_take_traffic_pulling_away_ahead_as_flow():
+    ahead = lambda frame: (150.0, 600.0 if frame < 25 else 600.0 + 10.0 * (frame - 25))  # noqa: E731
+    fired = stopped_in_scene({"head": stands(50, 500), "ahead": ahead})
+    assert fired == {"head": [], "ahead": []}
 
 
 def test_stopped_forgets_a_vehicle_that_has_left():

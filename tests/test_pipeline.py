@@ -598,11 +598,11 @@ def test_stopped_vehicle_is_flagged_only_while_traffic_passes_it(tmp_path):
         "ground_points_m": [[0.0, 0.0], [20.0, 0.0], [20.0, 20.0], [0.0, 20.0]],
     }
     cfg = config(zones=LANES, calibration=calibration, rules={"stopped": {}})
-    standing = {frame: [Track("stalled", box(60, 50.0), "car")] for frame in range(1, 41)}
-    passing = {}  # a car every second down the next lane at 21.6 km/h
+    standing = {frame: [Track("stalled", box(150, 50.0), "car")] for frame in range(1, 41)}
+    passing = {}  # a car every second down the next lane at 18 km/h, going past the stalled one
     for start in (1, 11, 21, 31):
         for i in range(25):
-            track = Track(f"passing_{start}", box(40 + 6 * i, 150.0), "car")
+            track = Track(f"passing_{start}", box(35 + 5 * i, 150.0), "car")
             passing.setdefault(start + i, []).append(track)
     both = {frame: standing.get(frame, []) + passing.get(frame, []) for frame in range(1, 56)}
 

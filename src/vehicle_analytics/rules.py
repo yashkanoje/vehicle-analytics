@@ -168,14 +168,15 @@ class Stopped(Rule):
 
     Standing alone is not enough, because in a jam every vehicle stands. A vehicle is
     flagged only if another vehicle on its carriageway (the lanes with the same permitted
-    direction) was seen moving while it stood, and no other vehicle in its own lane has
-    been slow for as long. So a jam is not flagged, a breakdown with traffic passing it is,
-    and the queue behind a breakdown is not. A vehicle on an otherwise empty road is not
-    flagged either: nothing shows that the road was open.
+    direction) went past it while it stood, and no other vehicle in its own lane has been
+    slow for as long. So a jam is not flagged, a breakdown with traffic passing it is, and
+    the queue behind a breakdown is not. A vehicle on an otherwise empty road is not flagged
+    either: nothing shows that the road was open.
     """
 
     name = "stopped"
     WINDOW_S = 1.0  # how far back "slow" and "moving" are judged, and how long a sighting lasts
+    QUEUE_KMPH = 15.0  # below this over the window a vehicle is slow: queueing, not flowing
 
     def __init__(
         self, zones: Sequence[Zone], stop_speed_kmph: float, min_stop_s: float, fps: float
@@ -186,10 +187,9 @@ class Stopped(Rule):
         self.stop_speed_kmph = stop_speed_kmph
         self.min_stop_s = min_stop_s
         self.fps = fps
-        # Slow means covering less than the stop radius in a second: queueing traffic.
-        self._queue_kmph = stop_speed_kmph * min_stop_s
-        self._slow: dict[str, tuple[str, float, float]] = {}  # track -> lane, since, last seen
-        self._moving: dict[str, tuple[str | None, float]] = {}  # track -> carriageway, last seen
+        # track -> lane, slow since, last seen, ground position
+        self._slow: dict[str, tuple[str, float, float, tuple[float, float]]] = {}
+        self._passed: dict[str, float] = {}  # track -> when a moving vehicle last went past it
 
     def update(self, state: TrackState, t: float) -> Violation | None:
         self._watch(state, t)  # every vehicle, flagged or not, is evidence about the others
@@ -198,7 +198,7 @@ class Stopped(Rule):
     def forget(self, track_id: str) -> None:
         super().forget(track_id)
         self._slow.pop(track_id, None)
-        self._moving.pop(track_id, None)
+        self._passed.pop(track_id, None)
 
     def _lane_of(self, state: TrackState) -> str | None:
         return next((name for name in self._lanes if name in state.zone_entered), None)
@@ -206,35 +206,44 @@ class Stopped(Rule):
     def _watch(self, state: TrackState, t: float) -> None:
         lane = self._lane_of(state)
         history = state.ground_history
+        window_frames = self.WINDOW_S * self.fps
         watched_frames = state.last_frame - history[0][0] if history else 0
-        if lane is None or watched_frames < self.WINDOW_S * self.fps:
+        if lane is None or watched_frames < window_frames:
             return  # outside the lanes, or not watched for a full window yet
         kmph = state.live_speed_kmph(self.fps, self.WINDOW_S)
         if kmph is None:
             return
-        if kmph < self._queue_kmph:
-            self._moving.pop(state.track_id, None)
+        now_frame, here = history[-1]
+        if kmph < self.QUEUE_KMPH:
             previous = self._slow.get(state.track_id)
             since = previous[1] if previous and previous[0] == lane else t
-            self._slow[state.track_id] = (lane, since, t)
-        else:
-            self._slow.pop(state.track_id, None)
-            self._moving[state.track_id] = (self._carriageway[lane], t)
+            self._slow[state.track_id] = (lane, since, t, here)
+            return
+        self._slow.pop(state.track_id, None)
+        # Direction of travel over the window, which box jitter cannot reverse.
+        start = here
+        for frame, ground in reversed(history):
+            if now_frame - frame > window_frames:
+                break
+            start = ground
+        heading = (here[0] - start[0], here[1] - start[1])
+        carriageway = self._carriageway[lane]
+        for other, (other_lane, _, seen, at) in self._slow.items():
+            if self._carriageway[other_lane] != carriageway or seen < t - self.WINDOW_S:
+                continue
+            # Behind it a window ago and level with or beyond it now: robust to its jitter.
+            if _along(start, at, heading) < 0 <= _along(here, at, heading):
+                self._passed[other] = t
 
     def _traffic_explains(self, track_id: str, lane: str, t: float) -> bool:
         """Whether the road, not the vehicle, may be why it stands."""
-        carriageway = self._carriageway[lane]
-        flowing = any(
-            other != track_id and where == carriageway and seen >= t - self.min_stop_s
-            for other, (where, seen) in self._moving.items()
-        )
-        if not flowing:
-            return True
+        if self._passed.get(track_id, -math.inf) < t - self.min_stop_s:
+            return True  # nothing went past it: it may be part of a jam
         mine = self._slow.get(track_id)
         my_since = mine[1] if mine and mine[0] == lane else t
         return any(
             other != track_id and where == lane and since <= my_since and seen >= t - self.WINDOW_S
-            for other, (where, since, seen) in self._slow.items()
+            for other, (where, since, seen, _) in self._slow.items()
         )
 
     def _check(self, state: TrackState, t: float) -> Violation | None:
@@ -263,6 +272,13 @@ class Stopped(Rule):
         elapsed_s = (now_frame - frame) / self.fps
         measured = math.dist(ground, here) / elapsed_s * 3.6 if elapsed_s > 0 else 0.0
         return Violation(self.name, t, measured, self.stop_speed_kmph, unit="km/h", zone=lane)
+
+
+def _along(
+    point: tuple[float, float], origin: tuple[float, float], heading: tuple[float, float]
+) -> float:
+    """How far `point` lies beyond `origin` in the direction `heading` (scaled by its length)."""
+    return (point[0] - origin[0]) * heading[0] + (point[1] - origin[1]) * heading[1]
 
 
 def build_rules(

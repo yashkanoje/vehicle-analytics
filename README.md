@@ -174,7 +174,7 @@ fires at most once per vehicle. No learned model is involved after tracking.
 | `overspeed` | speed − 2 × its error bar is above the limit for the vehicle's class | a measured zone speed |
 | `wrong_way` | the vehicle is counted in a lane whose permitted direction is the other one | lane zones |
 | `restricted_zone` | it stays on a hard shoulder or in a restricted zone longer than `min_dwell_s` | such zones |
-| `stopped` | in a lane, it moves less over `min_stop_s` than a vehicle at `stop_speed_kmph` would, while other traffic on its carriageway moves | a calibration and lane zones |
+| `stopped` | in a lane, it moves less over `min_stop_s` than a vehicle at `stop_speed_kmph` would, and other traffic on its carriageway goes past it | a calibration and lane zones |
 | `class_lane` | its class is listed in a lane's `banned_classes` and it stays there | lanes with that list |
 
 A rule that the scene cannot support is switched off with a warning, and the run goes on.
@@ -256,14 +256,16 @@ How the rules behave at their edges:
   frame edge, or seen in fewer than half the frames of the period, is not judged.
 - `stopped` compares a standing vehicle with the traffic around it, because in a jam every
   vehicle stands and queuing is lawful. It flags a vehicle only if another vehicle on the
-  same carriageway (the lanes with the same permitted direction) was seen moving faster than
-  `stop_speed_kmph × min_stop_s` (15 km/h by default) while it stood, and no other vehicle
-  in its own lane had been slow for as long. So a whole jam is not flagged, a breakdown with
-  traffic passing it is, and the queue that forms behind a breakdown is not.
+  same carriageway (the lanes with the same permitted direction), moving at 15 km/h or more,
+  went past it in view while it stood, and no other vehicle in its own lane had been slow
+  for as long. So a whole jam is not flagged, nor is the head of a queue that traffic only
+  joins or pulls away from; a breakdown with traffic going past it is flagged, and the queue
+  that forms behind it is not.
 - What that costs: a vehicle stopped on an otherwise empty road is not flagged, since
-  nothing shows the road was open; two vehicles that stop together in one lane are not
-  flagged; and the first vehicle of a queue confined to one lane while the others flow (at
-  an exit, say) is flagged, because it looks the same as a breakdown.
+  nothing shows the road was open; a vehicle is flagged only once something has gone past
+  it, which can be well after `min_stop_s`; two vehicles that stop together in one lane are
+  not flagged; and the first vehicle of a queue confined to one lane while the others flow
+  (at an exit, say) is flagged, because it looks the same as a breakdown.
 - This behaviour rests on tests with scripted tracks. It has never been run on stationary
   traffic: the queue in the validation clip kept moving. Treat every draft it produces as a
   prompt to look, not a finding.
