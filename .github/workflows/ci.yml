@@ -7,7 +7,7 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -20,7 +20,7 @@ jobs:
       - name: Install CPU PyTorch
         run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
       - name: Install package
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,dashboard]"
       - name: Lint
         run: ruff check .
       - name: Test
