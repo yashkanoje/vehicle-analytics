@@ -592,6 +592,26 @@ def test_unsupported_rule_is_disabled_and_reported(tmp_path, caplog):
     assert [v.rule for v in result.violations] == ["overspeed"]
 
 
+def test_stopped_vehicle_is_flagged_only_while_traffic_passes_it(tmp_path):
+    calibration = {  # 0.1 m per pixel
+        "image_points": [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
+        "ground_points_m": [[0.0, 0.0], [20.0, 0.0], [20.0, 20.0], [0.0, 20.0]],
+    }
+    cfg = config(zones=LANES, calibration=calibration, rules={"stopped": {}})
+    standing = {frame: [Track("stalled", box(60, 50.0), "car")] for frame in range(1, 41)}
+    passing = {}  # a car every second down the next lane at 21.6 km/h
+    for start in (1, 11, 21, 31):
+        for i in range(25):
+            track = Track(f"passing_{start}", box(40 + 6 * i, 150.0), "car")
+            passing.setdefault(start + i, []).append(track)
+    both = {frame: standing.get(frame, []) + passing.get(frame, []) for frame in range(1, 56)}
+
+    flagged = run_script(both, 55, tmp_path / "flowing", cfg=cfg).violations
+    assert [(v.rule, v.zone, v.at_s) for v in flagged] == [("stopped", "left", 3.1)]
+    alone = run_script(standing, 41, tmp_path / "alone", cfg=cfg).violations
+    assert alone == []
+
+
 def test_violator_is_drawn_in_red_from_the_frame_it_is_caught(tmp_path, monkeypatch):
     flags = []
     monkeypatch.setattr(

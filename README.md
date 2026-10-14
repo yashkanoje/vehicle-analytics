@@ -174,7 +174,7 @@ fires at most once per vehicle. No learned model is involved after tracking.
 | `overspeed` | speed − 2 × its error bar is above the limit for the vehicle's class | a measured zone speed |
 | `wrong_way` | the vehicle is counted in a lane whose permitted direction is the other one | lane zones |
 | `restricted_zone` | it stays on a hard shoulder or in a restricted zone longer than `min_dwell_s` | such zones |
-| `stopped` | in a lane, it moves less over `min_stop_s` than a vehicle at `stop_speed_kmph` would | a calibration and lane zones |
+| `stopped` | in a lane, it moves less over `min_stop_s` than a vehicle at `stop_speed_kmph` would, while other traffic on its carriageway moves | a calibration and lane zones |
 | `class_lane` | its class is listed in a lane's `banned_classes` and it stays there | lanes with that list |
 
 A rule that the scene cannot support is switched off with a warning, and the run goes on.
@@ -254,11 +254,19 @@ How the rules behave at their edges:
 - `stopped` is judged on distance moved over the whole period, not on a momentary speed:
   far from the camera one pixel of box jitter is most of a metre. A vehicle cut by the
   frame edge, or seen in fewer than half the frames of the period, is not judged.
-- `stopped` does not know why a vehicle is standing. In a traffic jam it would flag every
-  vehicle in the queue, although queuing is lawful. It has never been run on stationary
-  traffic: the queue in the validation clip kept moving. Until the rule compares a vehicle
-  with the rest of its lane, use it only where standing traffic is not expected, and treat
-  every draft it produces as a prompt to look, not a finding.
+- `stopped` compares a standing vehicle with the traffic around it, because in a jam every
+  vehicle stands and queuing is lawful. It flags a vehicle only if another vehicle on the
+  same carriageway (the lanes with the same permitted direction) was seen moving faster than
+  `stop_speed_kmph × min_stop_s` (15 km/h by default) while it stood, and no other vehicle
+  in its own lane had been slow for as long. So a whole jam is not flagged, a breakdown with
+  traffic passing it is, and the queue that forms behind a breakdown is not.
+- What that costs: a vehicle stopped on an otherwise empty road is not flagged, since
+  nothing shows the road was open; two vehicles that stop together in one lane are not
+  flagged; and the first vehicle of a queue confined to one lane while the others flow (at
+  an exit, say) is flagged, because it looks the same as a breakdown.
+- This behaviour rests on tests with scripted tracks. It has never been run on stationary
+  traffic: the queue in the validation clip kept moving. Treat every draft it produces as a
+  prompt to look, not a finding.
 - Dwell time in a zone counts from the first sighting inside it to the latest one, frames
   in which the tracker lost the vehicle included.
 - A violation belongs to a track. If the tracker gives a vehicle a new ID, a standing
@@ -369,7 +377,8 @@ speed carries the error bar described above.
   on the legal class of a vehicle cannot be applied reliably.
 - Four of the five rules have never fired on real footage, and the fifth only under a
   lowered limit.
-- `stopped` cannot tell a vehicle stopped on its own from one standing in a traffic jam.
+- `stopped` tells a jam from a breakdown only by the traffic around it, and has been checked
+  on scripted tracks, not on footage of standing traffic.
 - The sample challan uses an uncalibrated clip and a limit chosen for illustration.
 - Challan PDFs use a built-in Latin font: other scripts, and the rupee sign, do not print.
 - A database made by an earlier version of this software is refused; use a new file.

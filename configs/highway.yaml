@@ -57,8 +57,9 @@ rules:
   wrong_way:
   restricted_zone:
     min_dwell_s: 2.0
-  # Caution: this rule flags any vehicle standing in a lane, so in a traffic jam it would
-  # flag the whole queue. It has not been run on stationary traffic.
+  # Flags a vehicle standing in a lane only while other traffic on its carriageway moves,
+  # so a jam is not flagged; a vehicle stopped on an otherwise empty road is not flagged
+  # either. Checked on scripted tracks, not on footage of standing traffic.
   stopped:
     stop_speed_kmph: 5.0   # stopped = moved less than 5 km/h x 3 s = 4.2 m in 3 s
     min_stop_s: 3.0

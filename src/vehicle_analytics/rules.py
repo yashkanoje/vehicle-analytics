@@ -165,21 +165,80 @@ class Stopped(Rule):
     speed: far from the camera one pixel of box jitter is most of a metre, which over half
     a second reads as several km/h. The radius is the distance a vehicle at
     `stop_speed_kmph` would cover in `min_stop_s`.
+
+    Standing alone is not enough, because in a jam every vehicle stands. A vehicle is
+    flagged only if another vehicle on its carriageway (the lanes with the same permitted
+    direction) was seen moving while it stood, and no other vehicle in its own lane has
+    been slow for as long. So a jam is not flagged, a breakdown with traffic passing it is,
+    and the queue behind a breakdown is not. A vehicle on an otherwise empty road is not
+    flagged either: nothing shows that the road was open.
     """
 
     name = "stopped"
+    WINDOW_S = 1.0  # how far back "slow" and "moving" are judged, and how long a sighting lasts
 
     def __init__(
         self, zones: Sequence[Zone], stop_speed_kmph: float, min_stop_s: float, fps: float
     ) -> None:
         super().__init__()
-        self._lanes = [z.name for z in zones if z.kind == "lane"]
+        self._carriageway = {z.name: z.allowed_direction for z in zones if z.kind == "lane"}
+        self._lanes = list(self._carriageway)
         self.stop_speed_kmph = stop_speed_kmph
         self.min_stop_s = min_stop_s
         self.fps = fps
+        # Slow means covering less than the stop radius in a second: queueing traffic.
+        self._queue_kmph = stop_speed_kmph * min_stop_s
+        self._slow: dict[str, tuple[str, float, float]] = {}  # track -> lane, since, last seen
+        self._moving: dict[str, tuple[str | None, float]] = {}  # track -> carriageway, last seen
+
+    def update(self, state: TrackState, t: float) -> Violation | None:
+        self._watch(state, t)  # every vehicle, flagged or not, is evidence about the others
+        return super().update(state, t)
+
+    def forget(self, track_id: str) -> None:
+        super().forget(track_id)
+        self._slow.pop(track_id, None)
+        self._moving.pop(track_id, None)
+
+    def _lane_of(self, state: TrackState) -> str | None:
+        return next((name for name in self._lanes if name in state.zone_entered), None)
+
+    def _watch(self, state: TrackState, t: float) -> None:
+        lane = self._lane_of(state)
+        history = state.ground_history
+        watched_frames = state.last_frame - history[0][0] if history else 0
+        if lane is None or watched_frames < self.WINDOW_S * self.fps:
+            return  # outside the lanes, or not watched for a full window yet
+        kmph = state.live_speed_kmph(self.fps, self.WINDOW_S)
+        if kmph is None:
+            return
+        if kmph < self._queue_kmph:
+            self._moving.pop(state.track_id, None)
+            previous = self._slow.get(state.track_id)
+            since = previous[1] if previous and previous[0] == lane else t
+            self._slow[state.track_id] = (lane, since, t)
+        else:
+            self._slow.pop(state.track_id, None)
+            self._moving[state.track_id] = (self._carriageway[lane], t)
+
+    def _traffic_explains(self, track_id: str, lane: str, t: float) -> bool:
+        """Whether the road, not the vehicle, may be why it stands."""
+        carriageway = self._carriageway[lane]
+        flowing = any(
+            other != track_id and where == carriageway and seen >= t - self.min_stop_s
+            for other, (where, seen) in self._moving.items()
+        )
+        if not flowing:
+            return True
+        mine = self._slow.get(track_id)
+        my_since = mine[1] if mine and mine[0] == lane else t
+        return any(
+            other != track_id and where == lane and since <= my_since and seen >= t - self.WINDOW_S
+            for other, (where, since, seen) in self._slow.items()
+        )
 
     def _check(self, state: TrackState, t: float) -> Violation | None:
-        lane = next((name for name in self._lanes if name in state.zone_entered), None)
+        lane = self._lane_of(state)
         history = state.ground_history
         if lane is None or not history or history[-1][0] != state.last_frame:
             # Not in a lane, or not fully visible now. Unknown counts as moving: a vehicle
@@ -199,6 +258,8 @@ class Stopped(Rule):
             return None  # not watched for long enough yet
         if sightings < period_frames / 2:
             return None  # seen too rarely in the period to say it stood still
+        if self._traffic_explains(state.track_id, lane, t):
+            return None
         elapsed_s = (now_frame - frame) / self.fps
         measured = math.dist(ground, here) / elapsed_s * 3.6 if elapsed_s > 0 else 0.0
         return Violation(self.name, t, measured, self.stop_speed_kmph, unit="km/h", zone=lane)

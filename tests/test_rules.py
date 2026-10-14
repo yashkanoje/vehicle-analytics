@@ -108,14 +108,35 @@ def metres(p):
     return (p[0] / 10.0, p[1] / 10.0)
 
 
+def lane_at(x0, x1, direction):
+    corners = ((x0, 0.0), (x1, 0.0), (x1, 1000.0), (x0, 1000.0))
+    return Zone(f"{direction}_{x0:.0f}", "lane", corners, direction)
+
+
+NEXT_LANE = lane_at(100.0, 200.0, "up")
+
+
 def stopped_rule():
-    return Stopped([UP_LANE], stop_speed_kmph=5.0, min_stop_s=3.0, fps=FPS)
+    return Stopped([UP_LANE, NEXT_LANE], stop_speed_kmph=5.0, min_stop_s=3.0, fps=FPS)
+
+
+class Traffic:
+    """A car driving up the next lane at 36 km/h, so the carriageway is seen flowing."""
+
+    def __init__(self, rule):
+        self.rule, self.state = rule, TrackState("passing")
+
+    def step(self, frame):
+        self.state.observe(frame, (150.0, 10.0 * frame), "car", [], metres, [UP_LANE, NEXT_LANE])
+        self.rule.update(self.state, frame / FPS)
 
 
 def test_stopped_fires_after_standing_still_in_a_lane():
     rule, state = stopped_rule(), TrackState("7")
+    traffic = Traffic(rule)
     fired = {}
     for frame in range(1, 41):
+        traffic.step(frame)
         state.observe(frame, (50.0, 50.0), "car", [], metres, [UP_LANE])
         violation = rule.update(state, frame / FPS)
         if violation is not None:
@@ -140,8 +161,10 @@ def test_stopped_ignores_a_moving_vehicle_and_a_vehicle_outside_any_lane():
 
 def test_stopped_starts_again_after_the_vehicle_moves():
     rule, state = stopped_rule(), TrackState("7")
+    traffic = Traffic(rule)
     fired = []
     for frame in range(1, 81):
+        traffic.step(frame)
         y = 50.0 if frame < 20 or frame >= 30 else 50.0 + 5.0 * (frame - 19)
         state.observe(frame, (50.0, y), "car", [], metres, [UP_LANE])
         if rule.update(state, frame / FPS) is not None:
@@ -191,8 +214,10 @@ def far_away(p):
 def test_stopped_is_not_defeated_by_box_jitter_far_from_the_camera():
     # One pixel of jitter is 0.8 m here: over half a second that reads as 6 km/h.
     rule, state = stopped_rule(), TrackState("7")
+    traffic = Traffic(rule)
     fired = []
     for frame in range(1, 61):
+        traffic.step(frame)
         y = 50.0 + (frame % 2)
         state.observe(frame, (50.0, y), "car", [], far_away, [UP_LANE])
         if rule.update(state, frame / FPS) is not None:
@@ -215,6 +240,87 @@ def test_stopped_needs_enough_sightings_in_the_period():
     state.observe(1, (50.0, 50.0), "car", [], metres, [UP_LANE])
     state.observe(40, (50.0, 50.0), "car", [], metres, [UP_LANE])  # unseen for 3.9 s
     assert rule.update(state, 4.0) is None
+
+
+SCENE = [lane_at(0, 100, "up"), lane_at(100, 200, "up"), lane_at(200, 300, "down")]
+
+
+def stands(x, y, start=1):
+    return lambda frame: (x, y) if frame >= start else None
+
+
+def drives(x):
+    return lambda frame: (x, 10.0 * frame)  # 1 m per frame, 36 km/h
+
+
+def stopped_in_scene(paths, frames=60):
+    """Run the stopped rule over several vehicles; the frames at which each one is flagged."""
+    rule = Stopped(SCENE, stop_speed_kmph=5.0, min_stop_s=3.0, fps=FPS)
+    states = {name: TrackState(name) for name in paths}
+    fired = {name: [] for name in paths}
+    for frame in range(1, frames + 1):
+        for name, path in paths.items():
+            point = path(frame)
+            if point is None:
+                continue
+            states[name].observe(frame, point, "car", [], metres, SCENE)
+            if rule.update(states[name], frame / FPS) is not None:
+                fired[name].append(frame)
+    return fired
+
+
+def test_stopped_flags_a_breakdown_while_the_next_lane_flows():
+    fired = stopped_in_scene({"broken": stands(50, 500), "passing": drives(150)})
+    assert fired == {"broken": [31], "passing": []}
+
+
+def test_stopped_does_not_flag_a_vehicle_on_an_otherwise_empty_road():
+    # Nothing shows that the road is open, so standing is not taken as a fault.
+    assert stopped_in_scene({"alone": stands(50, 500)}) == {"alone": []}
+
+
+def test_stopped_does_not_count_traffic_on_the_other_carriageway_as_flow():
+    fired = stopped_in_scene({"standing": stands(50, 500), "oncoming": drives(250)})
+    assert fired["standing"] == []
+
+
+def test_stopped_does_not_flag_the_head_of_a_forming_jam():
+    fired = stopped_in_scene({"first": stands(50, 500), "second": stands(50, 450, start=20)})
+    assert fired == {"first": [], "second": []}
+
+
+def test_stopped_does_not_flag_a_whole_jam():
+    paths = {f"q{i}": stands(50 + 100 * (i % 2), 500 - 50 * i, start=1 + 4 * i) for i in range(5)}
+    assert all(frames == [] for frames in stopped_in_scene(paths).values())
+
+
+def test_stopped_flags_only_the_head_of_a_queue_behind_a_breakdown():
+    fired = stopped_in_scene(
+        {
+            "broken": stands(50, 500),
+            "behind_1": stands(50, 450, start=10),
+            "behind_2": stands(50, 400, start=20),
+            "passing": drives(150),
+        }
+    )
+    assert fired == {"broken": [31], "behind_1": [], "behind_2": [], "passing": []}
+
+
+def test_stopped_does_not_flag_two_vehicles_that_stopped_together_in_one_lane():
+    fired = stopped_in_scene(
+        {"front": stands(50, 500), "back": stands(50, 450), "passing": drives(150)}
+    )
+    assert fired == {"front": [], "back": [], "passing": []}
+
+
+def test_stopped_forgets_a_vehicle_that_has_left():
+    rule = Stopped(SCENE, stop_speed_kmph=5.0, min_stop_s=3.0, fps=FPS)
+    state = TrackState("gone")
+    for frame in range(1, 21):
+        state.observe(frame, (50.0, 500.0), "car", [], metres, SCENE)
+        rule.update(state, frame / FPS)
+    rule.forget("gone")
+    assert "gone" not in repr(vars(rule))
 
 
 def test_overspeed_is_dropped_when_the_final_class_has_a_higher_limit():
